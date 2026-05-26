@@ -243,3 +243,41 @@ D:\Users\dropbox_sync\（知识库根目录）
 - **精确匹配**：以 PDF 文件名为锚点，确保音频与笔记的准确关联
 
 项目已在新电脑上成功运行，验证了迁移兼容性。
+
+---
+
+## 8. Git 推送踩坑记录
+
+### 8.1 问题现象
+
+执行 `git push origin master` 后，终端显示推送成功：
+```
+To https://github.com/decai335335-debug/doubao-podcast-obsidian-bridge.git
+   1cb166b..5182b52  master -> master
+```
+但打开 GitHub 页面，文件列表和 README 内容仍是旧版本，没有任何更新。
+
+### 8.2 根因分析
+
+| 检查项 | 结果 |
+|--------|------|
+| 本地 commit | `5182b52`（最新） |
+| 远程 `master` | `5182b52`（一致） |
+| 远程 `main` | `de6fd39`（旧版本） |
+| GitHub 默认分支 | `main` |
+
+**结论**：GitHub 仓库的默认分支是 `main`，而本地推送到了 `master`。两个分支的历史完全不同（没有共同祖先），`main` 是用户之前通过 GitHub 网页上传初始文件时自动创建的，`master` 是后续本地开发使用的。
+
+### 8.3 解决过程
+
+1. **发现分支错位**：`git ls-remote origin` 显示 `refs/heads/main` 和 `refs/heads/master` 指向不同的 commit
+2. **尝试直接推送**：`git push origin master:main` 被拒绝（`fetch first`），因为远程 `main` 有本地没有的提交
+3. **合并分支**：`git fetch origin main` → `git merge master --allow-unrelated-histories`，保留本地最新版本解决冲突
+4. **推送到 main**：`git push origin main` 成功，GitHub 页面立即更新
+
+### 8.4 经验教训
+
+- **推送前确认默认分支**：GitHub 新仓库默认是 `main`，但本地 git 初始化默认是 `master`，两者不一致是常见坑
+- **不要假设 `git push` 成功 = 网页可见**：必须确认推送到了正确的远程分支
+- **检查命令**：`git ls-remote origin HEAD` 可以快速确认远程默认分支的 HEAD 指向哪里
+- **统一分支名**：建议在本地将默认分支也改为 `main`（`git branch -m master main`），避免今后再次踩坑
