@@ -215,122 +215,112 @@ async def upload_pdf(page, pdf_path: Path):
     log(f"准备上传 PDF: {pdf_path.name}")
 
     try:
-        # Step 1: 点击底部 "+" 按钮
+        # Step 1: 点击底部 "+" 按钮（可能需要多次点击）
         log("尝试点击 '+' 按钮...")
         plus_clicked = False
 
-        # 策略 A: 找底部输入框区域的所有可操作元素，逐个尝试点击，
-        #         然后检查是否出现了 "上传文件或图片"
-        bottom_buttons = await page.evaluate(
-            """
-            () => {
-                const results = [];
-                const candidates = document.querySelectorAll('button, div[role="button"], span[role="button"], svg');
-                for (const el of candidates) {
-                    const rect = el.getBoundingClientRect();
-                    // 只关注页面底部区域（y > 窗口高度的 80%）
-                    if (rect.bottom > window.innerHeight * 0.8 && rect.width > 10 && rect.height > 10) {
-                        const text = (el.textContent || el.innerText || '').trim();
-                        const html = el.outerHTML.toLowerCase();
-                        results.push({
-                            text: text,
-                            tag: el.tagName,
-                            html_preview: html.substring(0, 200),
-                            bottom: rect.bottom,
-                            isVisible: el.offsetParent !== null
-                        });
+        # 先滚动到底部确保输入框可见
+        await page.evaluate("() => { window.scrollTo(0, document.body.scrollHeight); }")
+        await asyncio.sleep(0.5)
+
+        for attempt in range(1, 4):
+            log(f"第 {attempt} 次点击 '+'...")
+
+            # 每次都用 JS 实时探测底部最左侧的圆形按钮（不依赖固定选择器）
+            btn_info = await page.evaluate(
+                """
+                () => {
+                    const allBtns = document.querySelectorAll('button');
+                    let candidates = [];
+                    for (const btn of allBtns) {
+                        const rect = btn.getBoundingClientRect();
+                        // 必须在页面底部区域
+                        if (rect.bottom > window.innerHeight * 0.88 &&
+                            rect.width > 20 && rect.height > 20 &&
+                            rect.width < 60 && rect.height < 60) {
+                            candidates.push({
+                                left: rect.left,
+                                top: rect.top,
+                                width: rect.width,
+                                height: rect.height,
+                                text: (btn.textContent || btn.innerText || '').trim(),
+                                html: btn.outerHTML.substring(0, 200)
+                            });
+                        }
                     }
+                    // 按 left 排序取最左侧的
+                    candidates.sort((a, b) => a.left - b.left);
+                    if (candidates.length > 0) {
+                        const target = candidates[0];
+                        return {
+                            found: true,
+                            left: target.left,
+                            top: target.top,
+                            width: target.width,
+                            height: target.height,
+                            text: target.text,
+                            cx: target.left + target.width / 2,
+                            cy: target.top + target.height / 2
+                        };
+                    }
+                    return {found: false};
                 }
-                return results;
-            }
-            """
-        )
-        log(f"底部候选按钮数量: {len(bottom_buttons)}")
-        for info in bottom_buttons[:10]:
-            log(f"  候选: text='{info['text']}' tag={info['tag']} bottom={info['bottom']:.0f}")
+                """
+            )
 
-        # 尝试通过文本匹配点击 "+"
-        for info in bottom_buttons:
-            if info['text'] == '+' or info['text'] == '＋':
-                try:
-                    # 用 JS 点击（通过坐标或文本匹配）
-                    clicked = await page.evaluate(
-                        """
-                        () => {
-                            const candidates = document.querySelectorAll('button, div[role="button"], span[role="button"]');
-                            for (const el of candidates) {
-                                const text = (el.textContent || el.innerText || '').trim();
-                                if (text === '+' || text === '＋') {
-                                    el.click();
-                                    return true;
-                                }
-                            }
-                            return false;
-                        }
-                        """
-                    )
-                    if clicked:
-                        log("通过 JS 文本 '+' 点击成功")
-                        plus_clicked = True
-                        break
-                except Exception:
-                    pass
+            if not btn_info.get("found"):
+                log_warn("未找到底部候选按钮")
+                break
 
-        # 策略 B: 如果文本匹配失败，尝试点击底部最左侧的按钮（通常是 "+"）
-        if not plus_clicked and bottom_buttons:
-            # 找 bottom 值最大的（最靠下的）且最靠左的
-            bottom_row = [b for b in bottom_buttons if b.get('isVisible')]
-            if bottom_row:
-                bottom_row.sort(key=lambda x: x['bottom'], reverse=True)
-                max_bottom = bottom_row[0]['bottom']
-                # 取最下面一行的元素，再按 left 排序取最左边的
-                # 这里简化：直接尝试点击最下面一行的前几个
-                clicked = await page.evaluate(
-                    """
-                    () => {
-                        const candidates = [...document.querySelectorAll('button, div[role="button"]')];
-                        const bottomEls = candidates.filter(el => {
-                            const rect = el.getBoundingClientRect();
-                            return rect.bottom > window.innerHeight * 0.85 && rect.width > 15 && rect.height > 15;
-                        });
-                        // 按 left 排序，取最左边的一个
-                        bottomEls.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-                        if (bottomEls.length > 0) {
-                            bottomEls[0].click();
-                            return true;
-                        }
-                        return false;
-                    }
-                    """
-                )
-                if clicked:
-                    log("通过 JS 点击底部最左侧按钮（推断为 '+'）")
-                    plus_clicked = True
+            log(f"探测到 '+' 按钮: ({btn_info['cx']:.0f}, {btn_info['cy']:.0f}) text='{btn_info['text']}'")
+
+            # 用真实鼠标序列点击
+            try:
+                await page.mouse.move(btn_info['cx'], btn_info['cy'])
+                await asyncio.sleep(0.2)
+                await page.mouse.down()
+                await asyncio.sleep(0.1)
+                await page.mouse.up()
+            except Exception as e:
+                log_warn(f"鼠标序列失败: {e}")
+
+            # 等待菜单出现
+            await asyncio.sleep(2)
+
+            # 检查菜单是否出现
+            upload_locator = page.get_by_text("上传文件或图片")
+            menu_count = await upload_locator.count()
+            if menu_count > 0:
+                log("菜单已弹出（检测到'上传文件或图片'）")
+                plus_clicked = True
+                break
+            else:
+                log_warn("菜单未弹出，准备再次点击 '+'")
 
         if not plus_clicked:
-            log_error("未能点击 '+' 按钮")
+            log_error("点击 '+' 3 次后菜单仍未弹出")
             await take_debug_screenshot(page, "plus_button_not_found")
             return False
 
-        await asyncio.sleep(1.5)
+        # Step 2+3: 先开始监听 filechooser，然后点击 "上传文件或图片"，最后设置文件
+        # 关键：expect_file_chooser 必须在触发对话框的操作之前/同时开始监听
+        log("开始监听 filechooser 并点击 '上传文件或图片'...")
 
-        # Step 2: 点击 "上传文件或图片"
-        log("尝试点击 '上传文件或图片'...")
-        upload_clicked = False
+        async def click_upload_option():
+            """点击上传选项的异步函数，供 expect_file_chooser 上下文调用"""
+            # 等待菜单出现
+            await asyncio.sleep(1)
 
-        # 策略 A: Playwright Locator
-        try:
+            # 策略 A: Playwright Locator
             upload_locator = page.get_by_text("上传文件或图片")
-            if await upload_locator.count() > 0:
+            count = await upload_locator.count()
+            if count > 0:
                 await upload_locator.first.click(timeout=3000)
                 log("通过 get_by_text('上传文件或图片') 点击成功")
-                upload_clicked = True
-        except Exception:
-            pass
+                return True
 
-        # 策略 B: JavaScript 遍历
-        if not upload_clicked:
-            upload_clicked = await page.evaluate(
+            # 策略 B: JavaScript 遍历
+            clicked = await page.evaluate(
                 """
                 () => {
                     const all = document.querySelectorAll('button, div, span, a, [role="button"]');
@@ -347,40 +337,28 @@ async def upload_pdf(page, pdf_path: Path):
                 }
                 """
             )
-            if upload_clicked:
+            if clicked:
                 log("通过 JS 找到并点击 '上传文件或图片'")
+                return True
 
-        if not upload_clicked:
-            log_error("未能点击 '上传文件或图片'")
-            await take_debug_screenshot(page, "upload_option_not_found")
             return False
 
-        await asyncio.sleep(1)
-
-        # Step 3: Playwright filechooser 设置文件
-        log("等待文件选择对话框并设置文件...")
         try:
-            async with page.expect_file_chooser(timeout=8000) as fc_info:
-                # 如果 "上传文件或图片" 的点击已经触发了 filechooser，
-                # expect_file_chooser 会捕获它
-                pass
+            # 在 expect_file_chooser 上下文内执行点击操作
+            async with page.expect_file_chooser(timeout=10000) as fc_info:
+                upload_ok = await click_upload_option()
+                if not upload_ok:
+                    raise Exception("未能点击 '上传文件或图片'")
+
             file_chooser = await fc_info.value
             await file_chooser.set_files(str(pdf_path))
             log(f"通过 filechooser 上传成功: {pdf_path.name}")
             await asyncio.sleep(2)
             return True
-        except Exception as e1:
-            log_warn(f"filechooser 方式失败: {e1}")
-            # 兜底：找出现的 file input
-            file_inputs = await page.query_selector_all('input[type="file"]')
-            if file_inputs:
-                try:
-                    await file_inputs[0].set_input_files(str(pdf_path))
-                    log(f"通过 file input 上传成功: {pdf_path.name}")
-                    await asyncio.sleep(2)
-                    return True
-                except Exception as e2:
-                    log_warn(f"file input 方式也失败: {e2}")
+
+        except Exception as e:
+            log_warn(f"filechooser 流程失败: {e}")
+            await take_debug_screenshot(page, "filechooser_failed")
 
     except Exception as e:
         log_warn(f"上传流程异常: {e}")
@@ -394,111 +372,102 @@ async def upload_pdf(page, pdf_path: Path):
 async def click_generate_podcast(page):
     """
     上传 PDF 后，点击 PDF 下方出现的"生成播客"按钮。
-    按钮文字为"生成播客 →"，用文本匹配即可定位。
+    策略：先定位最新上传的 PDF 卡片，然后只在该卡片内部查找"生成播客"。
     """
     log("等待并点击'生成播客'按钮...")
-
-    # 先等待一下，让豆包解析 PDF 并显示按钮
     await asyncio.sleep(3)
 
-    # 策略 1: Playwright Locator 文本匹配（推荐）
-    try:
-        locator = page.get_by_text("生成播客")
-        count = await locator.count()
-        if count > 0:
-            await locator.first.click(timeout=5000)
-            log("通过 get_by_text('生成播客') 点击成功")
-            await asyncio.sleep(1)
-            return True
-    except Exception as e:
-        log_warn(f"Locator 文本匹配失败: {e}")
-
-    # 策略 2: CSS 文本内容匹配
-    text_selectors = [
-        'button:has-text("生成播客")',
-        'div:has-text("生成播客")',
-        'span:has-text("生成播客")',
-        'a:has-text("生成播客")',
-        '[role="button"]:has-text("生成播客")',
-    ]
-    for sel in text_selectors:
-        try:
-            btn = await page.query_selector(sel)
-            if btn:
-                await btn.click(timeout=3000)
-                log(f"通过选择器点击'生成播客': {sel}")
-                await asyncio.sleep(1)
-                return True
-        except Exception:
-            pass
-
-    # 策略 3: JavaScript 遍历所有元素，匹配包含"生成播客"文本的元素
+    # 策略：找最新上传的 PDF → 在其消息卡片内找"生成播客"
     clicked = await page.evaluate(
         """
         () => {
-            // 遍历所有可见的元素
-            const allElements = document.querySelectorAll('button, div, span, a, [role="button"]');
-            for (const el of allElements) {
-                // 检查文本内容
-                const text = (el.textContent || el.innerText || '').trim();
-                if (text === '生成播客' || text.includes('生成播客')) {
-                    // 确保元素可见且可点击
-                    const rect = el.getBoundingClientRect();
-                    if (rect.width > 0 && rect.height > 0) {
-                        el.click();
-                        return {found: true, text: text, tag: el.tagName};
+            const SIDEBAR_WIDTH = 320; // 严格排除侧边栏
+
+            // 步骤1: 收集所有包含 .pdf 文本的叶子元素
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+            let pdfNodes = [];
+            while (walker.nextNode()) {
+                const text = walker.currentNode.textContent.toLowerCase();
+                if (text.includes('.pdf')) {
+                    const parent = walker.currentNode.parentElement;
+                    if (parent) {
+                        const rect = parent.getBoundingClientRect();
+                        if (rect.left > SIDEBAR_WIDTH) {
+                            pdfNodes.push({node: walker.currentNode, parent, rect});
+                        }
                     }
                 }
-                // 也检查 aria-label
-                const ariaLabel = el.getAttribute('aria-label') || '';
-                if (ariaLabel.includes('生成播客')) {
-                    el.click();
-                    return {found: true, text: ariaLabel, tag: el.tagName};
-                }
             }
-            return {found: false};
+            if (pdfNodes.length === 0) return {found: false, reason: 'no_pdf'};
+
+            // 步骤2: 取最下方的 PDF（最新上传的）
+            pdfNodes.sort((a, b) => b.rect.top - a.rect.top);
+            const latestPdf = pdfNodes[0];
+
+            // 步骤3: 从 PDF 元素向上追溯，找包含"生成播客"按钮的最近父容器
+            let container = latestPdf.parent;
+            for (let i = 0; i < 12 && container; i++) {
+                // 只在该容器内查找按钮
+                const btns = container.querySelectorAll('button, div[role="button"], span[role="button"], a[role="button"]');
+                for (const btn of btns) {
+                    const btnRect = btn.getBoundingClientRect();
+                    const btnText = (btn.textContent || btn.innerText || '').trim();
+                    // 必须是"生成播客"，且位置在 PDF 下方或附近
+                    if ((btnText === '生成播客' || btnText.includes('生成播客')) &&
+                        btnRect.left > SIDEBAR_WIDTH &&
+                        btnRect.top > latestPdf.rect.top - 50) { // 在 PDF 下方或附近
+                        btn.click();
+                        return {
+                            found: true,
+                            text: btnText,
+                            tag: btn.tagName,
+                            pdfTop: latestPdf.rect.top,
+                            btnTop: btnRect.top
+                        };
+                    }
+                }
+                container = container.parentElement;
+            }
+
+            return {found: false, reason: 'no_button_in_card'};
         }
         """
     )
     if clicked and clicked.get("found"):
-        log(f"通过 JavaScript 文本匹配点击'生成播客': {clicked.get('text')} (tag: {clicked.get('tag')})")
+        log(f"在最新 PDF 卡片内点击'生成播客': text='{clicked.get('text')}' (PDF top={clicked.get('pdfTop')}, btn top={clicked.get('btnTop')})")
         await asyncio.sleep(1)
         return True
 
-    # 策略 4: 兜底——找 PDF 卡片附近的所有可操作按钮，逐个尝试点击
+    log_warn(f"在 PDF 卡片内未找到'生成播客': {clicked.get('reason')}")
+
+    # 兜底：如果卡片内没找到，在整个主内容区最下方找"生成播客"
+    # 但必须确保不在 sidebar 内
     clicked = await page.evaluate(
         """
         () => {
-            // 找包含 .pdf 文字的元素
-            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
-            let pdfNode = null;
-            while (walker.nextNode()) {
-                if (walker.currentNode.textContent.toLowerCase().includes('.pdf')) {
-                    pdfNode = walker.currentNode;
-                    break;
+            const SIDEBAR_WIDTH = 320;
+            const all = document.querySelectorAll('button, div, span, a, [role="button"]');
+            let candidates = [];
+            for (const el of all) {
+                const rect = el.getBoundingClientRect();
+                const text = (el.textContent || el.innerText || '').trim();
+                if ((text === '生成播客' || text.includes('生成播客')) &&
+                    rect.left > SIDEBAR_WIDTH && rect.width > 0 && rect.height > 0) {
+                    candidates.push({el, rect, text});
                 }
             }
-            if (pdfNode) {
-                // 向上追溯到包含整个消息/卡片的父元素
-                let parent = pdfNode.parentElement;
-                for (let i = 0; i < 10 && parent; i++) {
-                    const btns = parent.querySelectorAll('button, [role="button"], [class*="button"]');
-                    for (const btn of btns) {
-                        const rect = btn.getBoundingClientRect();
-                        if (rect.width > 0 && rect.height > 0) {
-                            btn.click();
-                            return {found: true, text: btn.textContent || btn.innerText || '', tag: btn.tagName};
-                        }
-                    }
-                    parent = parent.parentElement;
-                }
+            // 取最下方的（最新的）
+            candidates.sort((a, b) => b.rect.top - a.rect.top);
+            if (candidates.length > 0) {
+                candidates[0].el.click();
+                return {found: true, text: candidates[0].text, top: candidates[0].rect.top};
             }
             return {found: false};
         }
         """
     )
     if clicked and clicked.get("found"):
-        log(f"通过 PDF 附近按钮推断点击: {clicked.get('text')} (tag: {clicked.get('tag')})")
+        log(f"兜底：点击主内容区最下方的'生成播客': text='{clicked.get('text')}' (top={clicked.get('top')})")
         await asyncio.sleep(1)
         return True
 
@@ -691,16 +660,26 @@ async def process_pdfs(pdf_files, args):
             progress["failed"] = list(failed)
             save_progress(progress)
 
-            # 处理完一个后稍作等待，让页面稳定
+            # 处理完一个后等待 8 秒，让页面稳定后再处理下一个
             if idx < len(pending):
-                log("等待 5 秒后处理下一个 PDF...")
-                await asyncio.sleep(5)
+                log("等待 8 秒后处理下一个 PDF...")
+                await asyncio.sleep(8)
 
         log(f"\n{'='*50}")
         log("所有 PDF 处理完毕")
         log(f"成功: {len(processed)} 个")
         log(f"失败: {len(failed)} 个")
         log(f"{'='*50}")
+
+        # 保存当前聊天页面 URL，供后续下载使用
+        current_url = page.url
+        url_file = SCRIPT_DIR / "chat_url.txt"
+        try:
+            with open(url_file, "w", encoding="utf-8") as f:
+                f.write(current_url)
+            log(f"聊天地址已保存: {url_file} -> {current_url}")
+        except Exception as e:
+            log_warn(f"保存聊天地址失败: {e}")
 
         # 最终截图
         await take_debug_screenshot(page, "upload_complete")
