@@ -6,7 +6,7 @@ doubao_full.py
 
 用法:
     python doubao_full.py <豆包URL>
-    例: python doubao_full.py https://www.doubao.com/chat/38424121600911362
+    例: python doubao_full.py https://www.doubao.com/chat/38427010004394498
 """
 
 import subprocess
@@ -25,11 +25,13 @@ def run_step(name, cmd):
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("用法: python doubao_full.py <豆包URL>")
-        sys.exit(1)
-    
-    url = sys.argv[1]
+    if len(sys.argv) >= 2:
+        url = sys.argv[1]
+    else:
+        url = input("请输入豆包URL (例如 https://www.doubao.com/chat/xxx): ").strip()
+        if not url:
+            print("错误: 未提供URL，程序退出")
+            sys.exit(1)
     script_dir = Path(__file__).parent
     
     # Step 1: 扫描

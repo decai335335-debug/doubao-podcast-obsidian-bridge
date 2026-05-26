@@ -1,0 +1,26 @@
+# 敏感文件
+doubao_state.json
+chat_url.txt
+
+# 调试输出
+doubao_debug/
+*.png
+*.jpg
+*.jpeg
+
+# 临时/运行时文件
+upload_progress.json
+podcasts_list.json
+embed_report.json
+md_check.json
+
+# 生成物目录
+pdf_output/
+md2pdf/
+文档备份。/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+

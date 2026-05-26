@@ -1,244 +1,242 @@
-# 豆包播客自动化工具链
+# 豆包播客全自动流水线
 
-> 全自动下载豆包 AI 播客 → 按原始 PDF 名称重命名 → 压缩为 MP3 → 绑定到 Obsidian Markdown
+> Markdown / PDF → 豆包 AI 播客 → 下载 → 压缩 MP3 → 自动绑定 Obsidian 笔记
 
----
-
-## 目录
-
-- [项目概述](#项目概述)
-- [技术栈与工具链](#技术栈与工具链)
-- [依赖库](#依赖库)
-- [文件结构](#文件结构)
-- [使用方法](#使用方法)
-- [设计原理](#设计原理)
-- [已知限制](#已知限制)
-- [故障排查](#故障排查)
+一句话：把豆包 AI "根据文档生成播客"的全流程串成一条自动化流水线，从 Markdown 到最终嵌入 Obsidian，全程无需人工干预。
 
 ---
 
-## 项目概述
+## 1. 解决什么痛点
 
-本项目解决的核心问题：**豆包 AI 生成的播客音频无法批量导出，且默认文件名与原始 PDF 无关**，导致用户在 Obsidian 知识库中难以管理和关联。
+### Before（以前是这样的）
 
-通过浏览器自动化（Playwright）+ 本地文件处理脚本，实现：
-1. 自动扫描豆包聊天记录中的所有播客
-2. 根据原始 PDF 名称精确定位并下载对应播客
-3. 将 WAV 压缩为 MP3（节省约 80% 空间）
-4. 自动在对应 Markdown 文件开头插入音频链接（`[[../附件/音频/xxx.mp3]]`）
+- 豆包网页**没有批量导出**播客的功能，52 个播客要逐个点击下载
+- 下载后的音频默认名叫 `AI播客_123456.wav`，**和原始 PDF 完全无关**，文件系统里根本认不出内容
+- Obsidian 里已有对应 PDF 的 Markdown 笔记，但播客音频和笔记之间**没有任何关联**，形成"有笔记无音频、有音频无笔记"的双轨割裂
+- 想把 Markdown 生成 PDF 再上传豆包生成播客，需要**手动操作 4 个独立工具**，步骤繁琐且容易出错
 
----
+### After（现在是这样的）
 
-## 技术栈与工具链
+- 一条命令完成：Markdown → PDF → 上传 → 生成播客 → 保存地址
+- 另一条命令完成：扫描 → 下载 → 按 PDF 同名重命名 → 压缩 MP3 → 自动嵌入 Markdown
+- 全程断点续传，中断后不用从头开始
+- 音频链接以 Obsidian WikiLink 语法嵌入，打开笔记直接播放
 
-| 层级 | 技术/工具 | 版本要求 | 用途 |
-|------|----------|---------|------|
-| **浏览器自动化** | Playwright (Python) | >= 1.59 | 控制 Chromium 浏览器，操作豆包网页 |
-| **浏览器内核** | Chromium | Playwright 自带 | 渲染豆包 SPA，执行 JavaScript |
-| **音频处理** | FFmpeg | >= 8.1 | WAV → MP3 压缩（libmp3lame 编码器）|
-| **编程语言** | Python | >= 3.10 | 主控脚本，异步 I/O 编排 |
-| **操作系统** | Windows 10/11 | - | 路径处理、PowerShell 剪贴板交互 |
-| **Shell** | Git Bash (MSYS2) | - | 执行命令行操作 |
-| **知识库** | Obsidian | - | Markdown 笔记存储与 WikiLink 渲染 |
+### 适合谁用
+
+- **知识库管理者** —— 在 Obsidian 中管理大量文档，希望每份文档都有配套的 AI 播客
+- **备考/复习用户** —— 把申论真题、技术文档转成 PDF，生成播客在路上听
+- **内容创作者** —— 批量把文章/笔记生成播客，分发到不同平台
 
 ---
 
-## 依赖库
+## 2. 核心功能
 
-### Python 包
+| 功能 | 解决什么问题 |
+|------|-------------|
+| **Markdown → PDF** | 不想手动打开编辑器导出 PDF，一键把 `.md` 转成排版精美的 PDF |
+| **PDF 批量上传 + 生成播客** | 同一个聊天窗口内逐个上传 PDF，自动点击"生成播客"，等待完成后处理下一个，不用守在旁边 |
+| **扫描页面所有播客** | 豆包虚拟列表只渲染视口内元素，脚本自动滚动并收集全部播客清单 |
+| **按 PDF 名称精确下载** | 下载的音频默认名是乱码，脚本根据"我将根据 xxx.pdf 的内容为你生成播客"这段文字，精确定位到对应的播客卡片并下载 |
+| **WAV 压缩为 MP3** | 豆包下载的是 WAV（平均 120MB），FFmpeg 压缩后约 25MB，节省 80% 空间 |
+| **自动绑定 Obsidian** | 在对应 Markdown 文件开头插入 `[[附件/音频/xxx.mp3]]`，打开笔记即可播放 |
+| **断点续传** | 52 个播客下载到第 30 个中断？重新运行自动跳过已下载的，不用从头来 |
+| **交互式流水线入口** | 输入 `a` 生成播客，输入 `b` 下载播客，不用记一堆命令行参数 |
+
+---
+
+## 3. 安装方法
+
+### 3.1 环境要求
+
+- Windows 10/11
+- Python >= 3.10
+- Git Bash（推荐）或 PowerShell
+
+### 3.2 安装依赖
 
 ```bash
+# 1. 安装 Playwright
 pip install playwright
-playwright install chromium
+python -m playwright install chromium
+
+# 2. 安装 Markdown 解析库（md2pdf 需要）
+pip install markdown
+
+# 3. 安装 FFmpeg（压缩音频用）
+# 下载地址：https://ffmpeg.org/download.html
+# 安装后确保 ffmpeg 在 PATH 中
+ffmpeg -version
 ```
 
-- **playwright**：微软出品的浏览器自动化库，支持异步 API、下载事件监听、storage_state 持久化
-- **asyncio**：Python 原生异步 I/O，用于并发编排浏览器操作和文件处理
+### 3.3 首次登录豆包
 
-### 系统依赖
-
-- **FFmpeg**：必须已安装并在 `PATH` 中可调用
-  ```bash
-  # 验证安装
-  ffmpeg -version
-  ```
+运行任意脚本时，如果浏览器显示登录框：
+1. 在浏览器内完成**扫码登录**或**手机号登录**
+2. 登录态会自动保存到 `doubao_state.json`
+3. 下次运行无需重复登录
 
 ---
 
-## 文件结构
+## 4. 使用方法
 
-```
-代码/
-├── README.md                      # 本文件
-├── DEV_LOG.md                     # 开发日志与设计决策
-├── doubao_full.py                 # 【入口】一键完整流程
-├── doubao_scanner.py              # 阶段1：扫描页面所有播客
-├── doubao_downloader.py           # 阶段2：精确下载（支持断点续传）
-├── post_process.py                # 阶段3：压缩MP3 + 删除WAV + 绑定Markdown
-├── podcasts_list.json             # 扫描结果（52个播客的PDF名、标题、时长）
-├── doubao_state.json              # 登录态持久化（Cookie + LocalStorage）
-├── md_check.json                  # Markdown对应关系检查报告
-├── embed_report.json              # 绑定结果报告
-└── doubao_debug/                  # 调试输出目录
-    ├── probe_*.png                # 页面截图
-    ├── probe_*.html               # 页面DOM快照
-    └── scan_final.png             # 最终扫描截图
-```
+### 场景一：从 Markdown 生成播客（模式 a）
 
----
-
-## 使用方法
-
-### 方式一：一键完整流程（推荐）
+**什么时候用**：你有一堆 Markdown 笔记，想让豆包 AI 根据它们生成播客
 
 ```bash
-cd 代码
-python doubao_full.py https://www.doubao.com/chat/xxxxxx
+python doubao_pipeline.py
+# 输入 a
 ```
 
-自动执行：扫描 → 下载 → 压缩 → 删除WAV → 绑定Markdown
+1. 在资源管理器中选中多个 Markdown 文件，按 **Ctrl + Shift + C** 复制路径
+2. 程序自动检测到剪贴板中的路径，按 **y** 确认
+3. 程序自动：Markdown → PDF → 打开浏览器 → 上传 → 点击"生成播客" → 等待完成
+4. 所有播客生成完毕后，聊天地址自动保存到 `pipeline_state.json`
 
-### 方式二：分步执行（适合调试）
+### 场景二：下载已生成的播客（模式 b）
 
-#### 步骤1：扫描页面
+**什么时候用**：播客已经生成完了，需要批量下载并绑定到 Obsidian
 
 ```bash
-python doubao_scanner.py https://www.doubao.com/chat/xxxxxx
+python doubao_pipeline.py
+# 输入 b
 ```
 
-- 打开浏览器，加载登录态
-- 持续向上滚动虚拟列表，收集所有播客
-- 输出 `podcasts_list.json`
-- 显示：共发现 N 个播客
+1. 程序自动读取上次保存的聊天地址
+2. 直接按 **回车** 确认，或输入 `n` 换其他地址
+3. 选择 `[1] 一键完整流程`
+4. 自动执行：扫描 → 下载 → 压缩 MP3 → 删除 WAV → 绑定 Markdown
 
-#### 步骤2：下载全部
+### 场景三：断点续传
+
+**什么时候用**：下载到一半断网/断电了，重新运行不想从头来
 
 ```bash
-python doubao_downloader.py https://www.doubao.com/chat/xxxxxx --all
+python doubao_pipeline.py
+# 输入 b → 确认地址 → 选择 [1] 一键完整流程
 ```
 
-- 从 `podcasts_list.json` 读取列表
-- 逐个滚动定位 → 点击下载 → 重命名为 PDF 同名
-- 断点续传：已下载的会自动跳过
+下载脚本会自动检查文件是否已存在，已下载的自动跳过。
 
-#### 步骤3：后处理
+### 场景四：仅处理指定 PDF
+
+**什么时候用**：只需要上传某几个特定的 PDF
 
 ```bash
-python post_process.py
+python doubao_uploader.py "C:\path\to\file1.pdf" "C:\path\to\file2.pdf"
 ```
 
-- 遍历 `附件/音频/*.wav`
-- FFmpeg 压缩为 MP3（`-q:a 2`，约 1/5 体积）
-- 删除 WAV
-- 在对应 Markdown 开头插入播客链接
+### 场景五：指定文件名下载
 
-### 方式三：指定文件名下载
+**什么时候用**：只需要下载某几个播客，不想全量扫描
 
 ```bash
 python doubao_downloader.py <URL> "文件名1.pdf" "文件名2.pdf"
 ```
 
-### 方式四：批量文件下载
+---
+
+## 5. 技术栈
+
+### 5.1 核心技术
+
+| 层级 | 技术 | 用途 |
+|------|------|------|
+| 浏览器自动化 | Playwright (Python async API) | 控制 Chromium，操作豆包 SPA |
+| 浏览器内核 | Chromium（Playwright 自带） | 渲染豆包页面，执行 JavaScript |
+| Markdown 解析 | Python `markdown` 库 | md2pdf 的 Markdown → HTML 转换 |
+| 音频处理 | FFmpeg（libmp3lame） | WAV → MP3 压缩 |
+| 编程语言 | Python 3.10+ | 异步 I/O 编排 |
+
+### 5.2 依赖库
 
 ```bash
-# 创建 batch.txt，每行一个PDF名称
-python doubao_downloader.py <URL> --batch batch.txt
+pip install playwright markdown
+python -m playwright install chromium
+```
+
+- **playwright**：微软出品，原生支持 `expect_download` 和 `expect_file_chooser`
+- **markdown**：标准的 Markdown → HTML 解析器，支持表格、代码块等扩展
+
+---
+
+## 6. 文件结构
+
+```
+doubao-podcast-obsidian-bridge/
+├── README.md                     # 本文件
+├── DEV_LOG.md                    # 开发日志与踩坑记录
+├── 豆包播客自动化下载与Obsidian绑定_任务总结.md   # 项目复盘
+│
+├── doubao_pipeline.py            # 【推荐入口】交互式流水线 (a生成 / b下载)
+├── doubao_full.py                # 一键完整流程（扫描→下载→压缩→绑定）
+│
+├── md2pdf.py                     # Markdown → PDF 转换（基于 Chromium 渲染）
+├── doubao_uploader.py            # PDF 上传 + 点击"生成播客" + 等待完成
+├── doubao_scanner.py             # 扫描页面所有播客（处理虚拟列表）
+├── doubao_downloader.py          # 精确下载（按 PDF 名称定位 + 断点续传）
+├── post_process.py               # FFmpeg 压缩 + 删除 WAV + 绑定 Markdown
+│
+├── pipeline_state.json           # 流水线状态（聊天URL、PDF列表、时间）
+├── upload_progress.json          # 上传断点续传记录
+├── podcasts_list.json            # 扫描结果（播客清单）
+├── doubao_state.json             # 登录态持久化（Cookie + LocalStorage）
+│
+└── doubao_debug/                 # 调试输出目录
+    ├── after_plus_click_*.png    # 点击"+"按钮后的截图
+    ├── upload_complete_*.png     # 上传完成截图
+    └── *.html                    # 页面 DOM 快照
 ```
 
 ---
 
-## 设计原理
-
-### 1. 两段式架构
-
-```
-浏览器层（Playwright）          本地层（Python）
-    │                              │
-    ├─ 打开豆包 SPA               ├─ 监听下载事件
-    ├─ 滚动虚拟列表               ├─ 重命名文件
-    ├─ 点击下载按钮               ├─ FFmpeg 压缩
-    └─ 捕获下载事件               └─ 修改 Markdown
-```
-
-**为什么不用直接 HTTP 下载？**
-- 豆包播客 URL 是动态生成的 blob/stream，无固定直链
-- 需要登录态 + JavaScript 渲染后才能获取
-
-### 2. 虚拟列表（Virtual List）处理
-
-豆包使用 CSS Transform 实现的虚拟列表（`data-observe-row` + `transform: translate(...)`），**只渲染视口附近的 DOM 节点**。
-
-**解决方案**：
-- 通过 JavaScript `document.createTreeWalker()` 遍历所有文本节点
-- 若未找到目标，向上滚动滚动容器（`scrollTop -= 600`）触发 React 重新渲染
-- 循环最多 100 次，直到找到或到达顶部
-
-### 3. 精确绑定策略
-
-**问题**：页面上有多个播客，如何确保下载的是"对应"的？
-
-**方案**：以 **PDF 文件名** 为锚点
-- 每个播客卡片上方都有文字：`"我将根据 xxx.pdf 的内容为你生成播客"`
-- 在浏览器内使用 TreeWalker 找到包含该 PDF 名称的文本节点
-- 向上追溯 DOM 树，直到找到 `data-plugin-identifier="Symbol(receive-podcast-content)"` 的播客卡片
-- 在该卡片内部点击下载按钮
-
-### 4. 登录态持久化
-
-- Playwright 的 `context.storage_state()` 保存 Cookie + LocalStorage
-- 文件：`doubao_state.json`
-- 下次启动时自动加载，无需重复扫码
-
-### 5. 断点续传
-
-下载前检查目标文件是否已存在：
-```python
-existing = list(AUDIO_DIR.glob(f"{target_name}.*"))
-if existing:
-    return True  # 跳过
-```
-
-### 6. 编码兼容
-
-Windows 终端默认使用 GBK 编码，导致中文输出乱码。
-- 所有文件操作使用 UTF-8 编码
-- 终端输出尽量使用 ASCII 字符（实际运行时仍可能有乱码）
-- 关键结果保存为 JSON 文件，避免依赖终端显示
-
----
-
-## 已知限制
-
-| 限制 | 说明 |
-|------|------|
-| 虚拟列表不稳定性 | 极个别情况下，向上滚动后目标播客仍未渲染到 DOM 中 |
-| 下载取消 | 某些播客在豆包端会被主动取消下载（原因不明）|
-| Markdown 缺失 | 如果 Obsidian 库中没有对应的 `.md` 文件，无法绑定 |
-| 单浏览器实例 | 多个后台任务同时操作可能因 storage_state 写入冲突而失败 |
-| 终端乱码 | Windows Git Bash 对中文字符支持不完善 |
-
----
-
-## 故障排查
+## 7. 常见问题
 
 ### Q：浏览器打开后显示登录框
-A：正常。如果是首次运行，请在浏览器内完成扫码/手机号登录。登录态会自动保存到 `doubao_state.json`，下次无需重复登录。
 
-### Q：下载按钮找不到
-A：豆包页面结构可能更新。运行探测模式查看当前 DOM：
-```bash
-python doubao_scanner.py <URL>
-```
-检查 `doubao_debug/probe_*.png` 截图。
+**A**：正常。首次运行请在浏览器内完成扫码/手机号登录，登录态会自动保存到 `doubao_state.json`。下次运行自动加载。
+
+### Q：粘贴多个 Markdown 路径，程序只识别到一个
+
+**A**：这是 Git Bash 的输入限制。请使用**剪贴板方式**：在资源管理器中选中文件 → `Ctrl + Shift + C` 复制路径 → 程序自动检测剪贴板内容。
+
+### Q：上传时提示 "filechooser 流程失败: Target page has been closed"
+
+**A**：md2pdf 和 uploader 都使用了 Playwright，两个浏览器实例可能冲突。脚本已在两者之间加入 2 秒等待。如果仍失败，请手动关闭所有 Chrome 进程后重试。
+
+### Q："生成播客"按钮点击到了左侧历史对话
+
+**A**：已修复。脚本现在采用"以 PDF 为中心"的定位策略，只在最新上传的 PDF 卡片内部查找"生成播客"按钮，完全排除 sidebar 区域。
+
+### Q：pdf_output 文件夹里有旧的 PDF，程序把它们也传上去了
+
+**A**：已修复。程序现在只收集**本次传入的 Markdown 对应的 PDF**（根据文件名匹配），不会混入旧文件。
 
 ### Q：下载文件被占用（PermissionError）
-A：浏览器可能还未释放文件句柄。脚本已内置重试逻辑（最多等 5 秒）。如仍失败，稍后手动移动文件即可。
 
-### Q：FFmpeg 报错
-A：确认 FFmpeg 已安装并在 PATH 中：
-```bash
-ffmpeg -version
-```
+**A**：浏览器可能还未释放文件句柄。`doubao_downloader.py` 已内置重试逻辑（最多等 5 秒）。如仍失败，稍后手动移动文件即可。
+
+### Q：FFmpeg 报错 `UnicodeDecodeError`
+
+**A**：Windows 默认 GBK 编码导致。`post_process.py` 已内置修复（`encoding='utf-8', errors='ignore'`），无需操作。
+
+### Q：绑定 Markdown 时提示"找不到对应 Markdown"
+
+**A**：检查 Obsidian 库中的 Markdown 文件名是否与音频文件名一致。脚本已支持**模糊匹配**（音频名被包含在 Markdown 文件名中即可匹配，如 `指针与引用.mp3` 可匹配 `2.5 指针与引用.md`）。
+
+### Q：嵌入的音频链接在 Obsidian 中打不开
+
+**A**：检查链接路径。`post_process.py` 已改用动态相对路径计算（根据 Markdown 文件实际位置），旧版本硬编码的 `../附件/音频` 可能导致路径错误。重新运行 `post_process.py` 即可自动修正。
+
+---
+
+## 8. 更新日志
+
+| 日期 | 版本 | 更新内容 |
+|------|------|---------|
+| 2026-05-23 | v1.0 | 初始版本：扫描 → 下载 → 压缩 → 绑定 |
+| 2026-05-27 | v2.0 | 新增 PDF 上传 + 播客生成功能，创建交互式流水线入口 `doubao_pipeline.py` |
 
 ---
 

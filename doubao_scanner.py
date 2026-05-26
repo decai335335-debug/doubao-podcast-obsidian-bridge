@@ -45,7 +45,7 @@ async def scroll_up_and_collect(page):
             try:
                 text = await card.inner_text()
                 # 提取PDF名称
-                pdf_matches = re.findall(r'([^\\/:*?"<>|\s]+\.pdf)', text, re.IGNORECASE)
+                pdf_matches = re.findall(r'([^\\/:*?"<>|]+\.pdf)', text, re.IGNORECASE)
                 for pdf in pdf_matches:
                     if pdf not in seen_pdfs:
                         seen_pdfs.add(pdf)
@@ -162,9 +162,10 @@ async def main():
         # 扫描所有播客
         podcasts = await scroll_up_and_collect(page)
         
-        # 保存JSON
+        # 保存JSON（保存到脚本所在目录，和下载器保持一致）
         import json
-        with open('podcasts_list.json', 'w', encoding='utf-8') as f:
+        json_path = Path(__file__).parent / 'podcasts_list.json'
+        with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(podcasts, f, ensure_ascii=False, indent=2)
         
         # 输出结果
