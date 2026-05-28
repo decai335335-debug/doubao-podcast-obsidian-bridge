@@ -173,8 +173,6 @@ def embed_podcast(md_path: Path, mp3_name: str, chat_url: str = ""):
     new_content = embed_block + content
     md_path.write_text(new_content, encoding="utf-8")
     print(f"[嵌入] {md_path.name}")
-    # 记录绑定成功
-    append_download_bind_record(mp3_name, chat_url)
 
 
 def process_mp3(mp3_path: Path, chat_url: str = ""):
@@ -212,6 +210,32 @@ def load_last_upload_batch() -> list:
     return files
 
 
+def mark_upload_records_as_bound(bound_stems: list):
+    """统一在记录文件的最近一次批量上传块中，给已绑定的文件添加 ✅ 标记"""
+    if not bound_stems or not RECORD_FILE.exists():
+        return
+    
+    content = RECORD_FILE.read_text(encoding="utf-8")
+    parts = content.split("### [批量上传]")
+    if len(parts) < 2:
+        return
+    
+    last_block = parts[-1]
+    modified = False
+    for stem in bound_stems:
+        old_line = f"  - [[{stem}]]"
+        new_line = f"  - [[{stem}]] ✅ 绑定成功"
+        if old_line in last_block and new_line not in last_block:
+            last_block = last_block.replace(old_line, new_line, 1)
+            modified = True
+    
+    if modified:
+        parts[-1] = last_block
+        content = "### [批量上传]".join(parts)
+        RECORD_FILE.write_text(content, encoding="utf-8")
+        print(f"[已标记] {len(bound_stems)} 个文件为绑定成功")
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="WAV → MP3 压缩 + 绑定 Markdown")
@@ -226,6 +250,8 @@ def main():
     if chat_url:
         print(f"[信息] 当前聊天链接: {chat_url}\n")
     
+    bound_stems = []  # 收集成功绑定的文件名
+    
     # 优先从上传记录读取本次要绑定的文件列表
     target_stems = load_last_upload_batch()
     
@@ -236,11 +262,12 @@ def main():
             mp3 = AUDIO_DIR / f"{stem}.mp3"
             if wav.exists():
                 result = wav_to_mp3(wav)
-                if result:
-                    process_mp3(result, chat_url)
+                if result and process_mp3(result, chat_url):
+                    bound_stems.append(stem)
                 print()
             elif mp3.exists():
-                process_mp3(mp3, chat_url)
+                if process_mp3(mp3, chat_url):
+                    bound_stems.append(stem)
                 print()
             else:
                 print(f"[跳过] 找不到音频: {stem}.wav/.mp3\n")
@@ -251,8 +278,8 @@ def main():
             print(f"[信息] 发现 {len(wav_files)} 个 WAV 文件待处理\n")
             for wav in wav_files:
                 mp3 = wav_to_mp3(wav)
-                if mp3:
-                    process_mp3(mp3, chat_url)
+                if mp3 and process_mp3(mp3, chat_url):
+                    bound_stems.append(mp3.stem)
                 print()
         
         # 处理已有 MP3（仅当 --bind-existing 时）
@@ -262,10 +289,15 @@ def main():
             if args.bind_existing:
                 print(f"[信息] 发现 {len(mp3_to_bind)} 个已有 MP3 待绑定\n")
                 for mp3 in mp3_to_bind:
-                    process_mp3(mp3, chat_url)
+                    if process_mp3(mp3, chat_url):
+                        bound_stems.append(mp3.stem)
                     print()
             else:
                 print(f"[信息] 跳过 {len(mp3_to_bind)} 个已有 MP3（用 --bind-existing 可强制绑定）\n")
+    
+    # 统一标记记录文件
+    if bound_stems:
+        mark_upload_records_as_bound(bound_stems)
     
     if not target_stems and not list(AUDIO_DIR.glob("*.wav")) and not list(AUDIO_DIR.glob("*.mp3")):
         print("[信息] 没有需要处理的音频文件")
