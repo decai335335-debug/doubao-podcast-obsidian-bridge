@@ -186,12 +186,18 @@ def process_mp3(mp3_path: Path, chat_url: str = ""):
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="WAV → MP3 压缩 + 绑定 Markdown")
+    parser.add_argument("--bind-existing", action="store_true",
+                        help="同时处理已有 MP3（默认只处理本次新下载的 WAV）")
+    args = parser.parse_args()
+
     # 读取当前聊天链接
     chat_url = _load_chat_url()
     if chat_url:
         print(f"[信息] 当前聊天链接: {chat_url}\n")
     
-    # 1. 处理 WAV 文件（压缩 + 绑定）
+    # 1. 处理 WAV 文件（压缩 + 绑定）——本次新下载的播客
     wav_files = sorted(AUDIO_DIR.glob("*.wav"))
     if wav_files:
         print(f"[信息] 发现 {len(wav_files)} 个 WAV 文件待处理\n")
@@ -202,14 +208,17 @@ def main():
             print()
     
     # 2. 处理已有 MP3 文件（仅绑定，跳过已绑定的）
+    # 默认不处理旧 MP3，避免每次运行都遍历全部历史文件
     mp3_files = sorted(AUDIO_DIR.glob("*.mp3"))
-    # 过滤掉已经处理过的（避免重复输出）
     mp3_to_bind = [m for m in mp3_files if not (m.with_suffix('.wav')).exists()]
     if mp3_to_bind:
-        print(f"[信息] 发现 {len(mp3_to_bind)} 个已有 MP3 待绑定\n")
-        for mp3 in mp3_to_bind:
-            process_mp3(mp3, chat_url)
-            print()
+        if args.bind_existing:
+            print(f"[信息] 发现 {len(mp3_to_bind)} 个已有 MP3 待绑定\n")
+            for mp3 in mp3_to_bind:
+                process_mp3(mp3, chat_url)
+                print()
+        else:
+            print(f"[信息] 跳过 {len(mp3_to_bind)} 个已有 MP3（用 --bind-existing 可强制绑定）\n")
     
     if not wav_files and not mp3_to_bind:
         print("[信息] 没有需要处理的音频文件")

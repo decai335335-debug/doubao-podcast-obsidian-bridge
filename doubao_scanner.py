@@ -44,8 +44,8 @@ async def scroll_up_and_collect(page):
         for card in cards:
             try:
                 text = await card.inner_text()
-                # 提取PDF名称
-                pdf_matches = re.findall(r'([^\\/:*?"<>|]+\.pdf)', text, re.IGNORECASE)
+                # 提取PDF名称（只匹配"根据"后面的部分，避免把"我将根据"前缀带进来）
+                pdf_matches = re.findall(r'根据\s+(.+?\.pdf)', text, re.IGNORECASE)
                 for pdf in pdf_matches:
                     if pdf not in seen_pdfs:
                         seen_pdfs.add(pdf)
