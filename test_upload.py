@@ -68,8 +68,9 @@ async def test_upload_single(page, pdf_path: Path):
                         const rect = el.getBoundingClientRect();
                         const text = (el.textContent || el.innerText || '').trim();
                         const aria = el.getAttribute('aria-label') || '';
+                        const cls = (el.getAttribute('class') || '');
                         if (rect.left > SIDEBAR_WIDTH && rect.width > 0 && rect.height > 0) {
-                            if (text === '+' || aria.includes('添加') || el.className.includes('plus') || el.className.includes('add')) {
+                            if (text === '+' || aria.includes('添加') || cls.includes('plus') || cls.includes('add')) {
                                 el.click();
                                 return {found: true, text: text || aria, left: rect.left, top: rect.top};
                             }
