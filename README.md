@@ -42,6 +42,10 @@
 | **自动绑定 Obsidian** | 在对应 Markdown 文件开头插入 `[[附件/音频/xxx.mp3]]`，打开笔记即可播放 |
 | **断点续传** | 52 个播客下载到第 30 个中断？重新运行自动跳过已下载的，不用从头来 |
 | **交互式流水线入口** | 输入 `a` 生成播客，输入 `b` 下载播客，不用记一堆命令行参数 |
+| **CF_HDROP 剪贴板支持** | 从文件资源管理器复制文件时直接读取 Windows 原生文件格式，长路径和 emoji 文件名不会截断 |
+| **生成失败自动跳过** | 检测到"抱歉，暂时无法生成播客"等失败提示时，立即跳过当前文件，继续处理下一个，不等 600 秒超时 |
+| **"未命名"文件过滤** | 自动跳过文件名包含"未命名"的 Markdown 文件，避免生成无意义的播客 |
+| **一键扫描入剪贴板** | `scan_to_clipboard.py` 自动扫描指定目录下今天新增的 md 文件，直接写入剪贴板，无需手动复制路径 |
 
 ---
 
@@ -171,6 +175,7 @@ doubao-podcast-obsidian-bridge/
 │
 ├── doubao_pipeline.py            # 【推荐入口】交互式流水线 (a生成 / b下载)
 ├── doubao_full.py                # 一键完整流程（扫描→下载→压缩→绑定）
+├── scan_to_clipboard.py          # 自动扫描 md 文件并写入剪贴板
 │
 ├── md2pdf.py                     # Markdown → PDF 转换（基于 Chromium 渲染）
 ├── doubao_uploader.py            # PDF 上传 + 点击"生成播客" + 等待完成
@@ -182,6 +187,7 @@ doubao-podcast-obsidian-bridge/
 ├── upload_progress.json          # 上传断点续传记录
 ├── podcasts_list.json            # 扫描结果（播客清单）
 ├── doubao_state.json             # 登录态持久化（Cookie + LocalStorage）
+├── paths.txt                     # 路径列表文件（供 scan_to_clipboard 生成）
 │
 └── doubao_debug/                 # 调试输出目录
     ├── after_plus_click_*.png    # 点击"+"按钮后的截图
@@ -237,6 +243,7 @@ doubao-podcast-obsidian-bridge/
 |------|------|---------|
 | 2026-05-23 | v1.0 | 初始版本：扫描 → 下载 → 压缩 → 绑定 |
 | 2026-05-27 | v2.0 | 新增 PDF 上传 + 播客生成功能，创建交互式流水线入口 `doubao_pipeline.py` |
+| 2026-05-28 | v2.1 | **剪贴板增强**：支持 CF_HDROP 原生文件格式，解决长路径/emoji截断问题；**失败自动跳过**：检测到"无法生成播客"立即跳过，不等超时；**"未命名"过滤**：自动跳过无意义文件；**scan_to_clipboard**：一键扫描自动入剪贴板；**等待优化**：PDF 间隔从 8 秒降至 1 秒 |
 
 ---
 

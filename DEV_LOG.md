@@ -475,7 +475,7 @@ PDF 文件名在整个页面中唯一，比标题或 class 选择器更稳定。
 | 文件上传成功率 | 100% |
 | "生成播客"点击准确率 | 100%（以 PDF 为中心定位后）|
 | 播客生成检测准确率 | 100%（基准值策略后）|
-| PDF 间等待时间 | 8 秒 |
+| PDF 间等待时间 | 1 秒（从 8 秒优化） |
 
 ---
 
@@ -488,6 +488,7 @@ D:\GitHubDownloads\doubao-podcast-obsidian-bridge\
 ├── 豆包播客自动化下载与Obsidian绑定_任务总结.md   # 项目复盘
 ├── doubao_pipeline.py             # 【推荐入口】交互式流水线
 ├── doubao_full.py                 # 一键完整流程
+├── scan_to_clipboard.py           # 自动扫描 md → 剪贴板
 ├── md2pdf.py                      # Markdown → PDF
 ├── doubao_uploader.py             # PDF 上传 + 播客生成
 ├── doubao_scanner.py              # 扫描页面播客
@@ -497,12 +498,50 @@ D:\GitHubDownloads\doubao-podcast-obsidian-bridge\
 ├── upload_progress.json           # 上传断点续传
 ├── podcasts_list.json             # 扫描结果
 ├── doubao_state.json              # 登录态
+├── paths.txt                      # 路径列表
 └── doubao_debug/                  # 调试截图
 ```
 
 ---
 
-## 7. 未来优化方向
+## 7. 新增迭代（2026-05-28）
+
+### Iteration 14：剪贴板长路径截断问题
+
+**问题**：从文件资源管理器复制多个文件后，脚本通过 `tkinter.clipboard_get()` 读取路径，包含 `🤖`、`🎮` 等 emoji 的长路径被截断，导致大量文件找不到。
+
+**根因**：`tkinter` 的剪贴板读取使用 Tcl 字符串处理，对 Unicode 代理对（surrogate pair）计算长度错误。Windows 资源管理器 `Ctrl+C` 复制文件时，剪贴板里有 `CF_HDROP`（原生文件格式）和 `CF_UNICODETEXT`（文本格式）两种数据，文本格式在 emoji 路径上不可靠。
+
+**修复**：
+1. 新增 `_get_paths_from_clipboard_hdrop()`，使用 `ctypes` 直接调用 Windows API 读取 `CF_HDROP` 格式
+2. 读取优先级：`CF_HDROP` > `pyperclip` > `win32clipboard` > `tkinter`
+3. `CF_HDROP` 是 Windows 原生文件列表格式，路径完整，不受 emoji 影响
+
+### Iteration 15：播客生成失败导致卡死
+
+**问题**：豆包偶尔返回"抱歉，暂时无法生成播客"，但脚本继续等待播客卡片出现，直到 600 秒超时。
+
+**修复**：在 `wait_for_podcast()` 轮询循环中，每 3 秒检测一次页面 body 文本，匹配失败关键词（"抱歉，暂时无法生成播客"、"服务繁忙"、"生成失败"等），一旦匹配立即返回失败，主流程自动跳过该文件处理下一个。
+
+### Iteration 16："未命名"文件过滤
+
+**问题**：Obsidian 自动创建的 `未命名.md`、`未命名 6.md` 等文件被误传入流水线，生成无意义播客。
+
+**修复**：在 `doubao_pipeline.py` 和 `scan_to_clipboard.py` 的文件验证环节，增加 `if "未命名" in p.stem: skip` 过滤。
+
+### Iteration 17：PDF 间隔等待优化
+
+**问题**：处理完一个 PDF 后等待 8 秒再处理下一个，批量处理时浪费时间。
+
+**修复**：实测 1 秒足够页面稳定，将 `await asyncio.sleep(8)` 改为 `await asyncio.sleep(1)`。
+
+### Iteration 18：scan_to_clipboard 工具
+
+**新增**：`scan_to_clipboard.py` 自动扫描指定目录下今天 12:00 后新增的 md 文件，将完整路径直接写入 Windows 剪贴板。用户无需手动复制路径，运行一个命令即可。
+
+---
+
+## 8. 未来优化方向
 
 1. **单浏览器会话内完成扫描+下载**：目前扫描和下载分两次打开浏览器，可优化为一次会话内先扫描再下载，减少登录态加载时间。
 2. **并发下载**：Playwright 支持多个 `page` 共享一个 `context`，理论上可同时操作多个标签页下载。但豆包可能有反并发限制。

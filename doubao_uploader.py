@@ -518,7 +518,26 @@ async def wait_for_podcast(page, pdf_name: str, timeout: int = DEFAULT_WAIT_TIME
 
                 last_count = current_count
 
-            # 也检测是否有错误提示
+            # 检测豆包生成失败提示（关键：检测到失败立即跳过，不等超时）
+            page_text = await page.inner_text('body')
+            if page_text:
+                # 常见失败关键词
+                fail_keywords = [
+                    "抱歉，暂时无法生成播客",
+                    "抱歉，无法生成",
+                    "生成失败",
+                    "服务繁忙",
+                    "请稍后重试",
+                    "暂时无法处理",
+                    "请求过于频繁",
+                ]
+                for keyword in fail_keywords:
+                    if keyword in page_text:
+                        log_error(f"检测到豆包生成失败: '{keyword}' — 跳过此文件，继续下一个")
+                        await take_debug_screenshot(page, "podcast_generation_failed")
+                        return False
+
+            # 也检测页面上的 error/fail 类元素
             error_el = await page.query_selector('[class*="error"], [class*="fail"]')
             if error_el:
                 error_text = await error_el.inner_text()
@@ -660,10 +679,10 @@ async def process_pdfs(pdf_files, args):
             progress["failed"] = list(failed)
             save_progress(progress)
 
-            # 处理完一个后等待 8 秒，让页面稳定后再处理下一个
+            # 处理完一个后等待 1 秒，让页面稳定后再处理下一个
             if idx < len(pending):
-                log("等待 8 秒后处理下一个 PDF...")
-                await asyncio.sleep(8)
+                log("等待 1 秒后处理下一个 PDF...")
+                await asyncio.sleep(1)
 
         log(f"\n{'='*50}")
         log("所有 PDF 处理完毕")

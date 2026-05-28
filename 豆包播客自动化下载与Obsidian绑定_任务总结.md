@@ -41,6 +41,7 @@ MP3（体积缩小 79%）
 |------|------|------|
 | `doubao_pipeline.py` | 交互式统一入口（md2pdf → 上传 → 下载） | ✅ 可用 |
 | `doubao_full.py` | 一键执行扫描→下载→后处理全流程 | ✅ 可用 |
+| `scan_to_clipboard.py` | 自动扫描今日新增 md 文件并写入剪贴板 | ✅ 新增（2026-05-28） |
 | `md2pdf.py` | Markdown → PDF（Playwright 渲染） | ✅ 可用 |
 | `doubao_uploader.py` | 自动上传 PDF 到豆包并触发播客生成 | ✅ 可用 |
 | `doubao_scanner.py` | 扫描页面所有播客，提取文件名和下载链接 | ✅ 可用 |

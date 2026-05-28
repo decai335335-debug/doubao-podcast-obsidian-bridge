@@ -56,43 +56,149 @@ def save_state(state):
         print(f"⚠️  保存状态失败: {e}")
 
 
-def _get_paths_from_clipboard():
+def _get_paths_from_clipboard_hdrop():
     """
-    从 Windows 剪贴板读取文本内容，解析出可能的文件路径。
-    使用 tkinter（Python 标准库），无需额外安装。
+    从 Windows 剪贴板读取 CF_HDROP 格式（文件拖放格式）。
+    这是从文件资源管理器复制文件时最可靠的方式，路径不会被截断。
+    使用 ctypes（标准库），无需额外安装。
     """
     try:
-        import tkinter as tk
-    except ImportError:
+        import ctypes
+        from ctypes import wintypes
+
+        # Windows API 常量
+        CF_HDROP = 15
+
+        # 加载 DLL
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        shell32 = ctypes.windll.shell32
+
+        # 函数原型
+        user32.OpenClipboard.argtypes = [wintypes.HWND]
+        user32.OpenClipboard.restype = wintypes.BOOL
+        user32.CloseClipboard.restype = wintypes.BOOL
+        user32.GetClipboardData.argtypes = [wintypes.UINT]
+        user32.GetClipboardData.restype = wintypes.HANDLE
+        kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalLock.restype = wintypes.LPVOID
+        kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalUnlock.restype = wintypes.BOOL
+
+        # DragQueryFile 需要 shell32
+        shell32.DragQueryFileW.argtypes = [wintypes.HANDLE, wintypes.UINT, wintypes.LPWSTR, wintypes.UINT]
+        shell32.DragQueryFileW.restype = wintypes.UINT
+
+        if not user32.OpenClipboard(None):
+            return []
+
+        try:
+            hDrop = user32.GetClipboardData(CF_HDROP)
+            if not hDrop:
+                return []
+
+            # 获取文件数量
+            file_count = shell32.DragQueryFileW(hDrop, 0xFFFFFFFF, None, 0)
+            paths = []
+            buffer = ctypes.create_unicode_buffer(260)
+            for i in range(file_count):
+                shell32.DragQueryFileW(hDrop, i, buffer, 260)
+                path = buffer.value
+                if path:
+                    paths.append(path)
+            return paths
+        finally:
+            user32.CloseClipboard()
+    except Exception:
         return []
 
-    root = tk.Tk()
-    root.withdraw()
+
+def _get_paths_from_clipboard():
+    """
+    从 Windows 剪贴板读取文件路径。
+    优先级：
+      1. CF_HDROP（文件资源管理器复制，最可靠，不会截断）
+      2. pyperclip（纯文本复制，Unicode 支持好）
+      3. win32clipboard（Windows 原生 API）
+      4. tkinter（标准库回退）
+    """
+    paths = []
+
+    # 方案1：CF_HDROP（从文件资源管理器复制文件时的原生格式）
+    paths = _get_paths_from_clipboard_hdrop()
+    if paths:
+        return paths
+
+    # 方案2~4：读取纯文本，按行解析
+    text = ""
+
+    # 方案2：pyperclip
     try:
-        text = root.clipboard_get()
-    except tk.TclError:
-        return []
-    finally:
-        root.destroy()
+        import pyperclip
+        text = pyperclip.paste()
+    except Exception:
+        pass
+
+    # 方案3：win32clipboard CF_UNICODETEXT
+    if not text:
+        try:
+            import win32clipboard
+            win32clipboard.OpenClipboard()
+            if win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_UNICODETEXT):
+                text = win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT)
+            win32clipboard.CloseClipboard()
+        except Exception:
+            pass
+
+    # 方案4：tkinter
+    if not text:
+        try:
+            import tkinter as tk
+            root = tk.Tk()
+            root.withdraw()
+            try:
+                text = root.clipboard_get()
+            except tk.TclError:
+                pass
+            finally:
+                root.destroy()
+        except Exception:
+            pass
 
     if not text or not isinstance(text, str):
         return []
 
-    # 按行分割，提取可能的路径
-    paths = []
+    # 解析纯文本中的路径
     for line in text.strip().splitlines():
         item = line.strip().strip('"').strip("'")
-        if not item:
+        if not item or len(item) < 3:
             continue
-        # 过滤掉明显不是路径的行（如空行、纯数字等）
-        if len(item) < 3:
+        # 过滤掉标题行
+        if '（' in item and '）' in item and ('个' in item or '目录' in item):
             continue
-        # Windows 路径通常包含 :\ 或 /
-        if ':\\' in item or ':/' in item or item.startswith('\\'):
+        if item.startswith('C:') or item.startswith('D:') or item.startswith('E:'):
             paths.append(item)
-        # 也接受相对路径（包含 / 或 \）
+        elif ':\\' in item or ':/' in item:
+            paths.append(item)
         elif '/' in item or '\\' in item:
             paths.append(item)
+    return paths
+
+
+def _get_paths_from_file(file_path):
+    """从文本文件读取路径列表（每行一个路径）"""
+    paths = []
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                item = line.strip().strip('"').strip("'")
+                if not item or item.startswith('#'):
+                    continue
+                if len(item) < 3:
+                    continue
+                paths.append(item)
+    except Exception as e:
+        print(f"⚠️  读取文件失败: {e}")
     return paths
 
 
@@ -126,17 +232,44 @@ def mode_generate():
     if md_files:
         print(f"\n📋 从剪贴板检测到 {len(md_files)} 个路径:")
         for i, p in enumerate(md_files[:10], 1):
-            print(f"   [{i}] {p}")
+            display = p if len(p) < 70 else p[:67] + "..."
+            print(f"   [{i}] {display}")
         if len(md_files) > 10:
             print(f"   ... 还有 {len(md_files) - 10} 个")
         try:
-            use_clipboard = input("\n是否使用剪贴板中的路径? (y/n): ").strip().lower()
+            use_clipboard = input("\n是否使用剪贴板中的路径? (y/n/f=从文件读取): ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             use_clipboard = 'n'
-        if use_clipboard != 'y':
+        if use_clipboard == 'f':
             md_files = []
+            file_input = True
+        elif use_clipboard != 'y':
+            md_files = []
+            file_input = False
+        else:
+            file_input = False
+    else:
+        file_input = False
 
-    # 剪贴板未使用或为空，回退到手动输入
+    # 从文件读取路径
+    if not md_files and file_input:
+        default_path = SCRIPT_DIR / "paths.txt"
+        try:
+            file_path = input(f"请输入路径列表文件（默认: {default_path}）: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            file_path = ""
+        if not file_path:
+            file_path = str(default_path)
+        md_files = _get_paths_from_file(file_path)
+        if md_files:
+            print(f"\n📄 从文件读取到 {len(md_files)} 个路径:")
+            for i, p in enumerate(md_files[:10], 1):
+                display = p if len(p) < 70 else p[:67] + "..."
+                print(f"   [{i}] {display}")
+            if len(md_files) > 10:
+                print(f"   ... 还有 {len(md_files) - 10} 个")
+
+    # 剪贴板/文件都未使用或为空，回退到手动输入
     if not md_files:
         print("\n请粘贴 Markdown 文件路径（每行一个，支持拖放）")
         print("输入空行表示结束:\n")
@@ -161,6 +294,10 @@ def mode_generate():
             continue
         if p.suffix.lower() not in (".md", ".markdown"):
             print(f"⚠️  跳过（非 Markdown）: {p}")
+            continue
+        # 跳过文件名包含"未命名"的文件
+        if "未命名" in p.stem:
+            print(f"⚠️  跳过（未命名文件）: {p.name}")
             continue
         valid_md.append(str(p))
 
