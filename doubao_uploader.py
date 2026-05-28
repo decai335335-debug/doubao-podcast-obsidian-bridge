@@ -693,10 +693,10 @@ async def process_pdfs(pdf_files, args):
             progress["failed"] = list(failed)
             save_progress(progress)
 
-            # 处理完一个后等待 1 秒，让页面稳定后再处理下一个
+            # 处理完一个后等待 5 秒，让页面稳定后再处理下一个
             if idx < len(pending):
-                log("等待 1 秒后处理下一个 PDF...")
-                await asyncio.sleep(1)
+                log("等待 5 秒后处理下一个 PDF...")
+                await asyncio.sleep(5)
 
         log(f"\n{'='*50}")
         log("所有 PDF 处理完毕")
