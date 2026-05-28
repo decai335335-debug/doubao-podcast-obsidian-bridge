@@ -646,17 +646,31 @@ async def process_pdfs(pdf_files, args):
             log(f"[{idx}/{len(pending)}] 处理: {pdf_path.name}")
             log(f"{'='*50}")
 
-            # 上传 PDF
-            if not await upload_pdf(page, pdf_path):
-                log_error(f"上传失败，跳过: {pdf_path.name}")
+            # 上传 PDF（失败时重试，不跳过）
+            upload_success = False
+            for attempt in range(3):
+                if await upload_pdf(page, pdf_path):
+                    upload_success = True
+                    break
+                log_warn(f"上传失败，第 {attempt + 1}/3 次重试...")
+                await asyncio.sleep(5)
+            if not upload_success:
+                log_error(f"上传失败 3 次，跳过: {pdf_path.name}")
                 failed.add(pdf_path.name)
                 progress["failed"] = list(failed)
                 save_progress(progress)
                 continue
 
-            # 点击"生成播客"按钮
-            if not await click_generate_podcast(page):
-                log_error(f"点击'生成播客'失败，跳过: {pdf_path.name}")
+            # 点击"生成播客"按钮（失败时重试，不跳过）
+            gen_success = False
+            for attempt in range(3):
+                if await click_generate_podcast(page):
+                    gen_success = True
+                    break
+                log_warn(f"点击'生成播客'失败，第 {attempt + 1}/3 次重试...")
+                await asyncio.sleep(3)
+            if not gen_success:
+                log_error(f"点击'生成播客'失败 3 次，跳过: {pdf_path.name}")
                 failed.add(pdf_path.name)
                 progress["failed"] = list(failed)
                 save_progress(progress)
