@@ -19,6 +19,49 @@ from pathlib import Path
 VAULT = Path.home() / "Documents" / "Obsidian" / "申论真题"
 AUDIO_DIR = VAULT / "附件" / "音频"
 
+# 记录文件（与 pipeline 共用同一个）
+RECORD_FILE = Path.home() / "Documents" / "Obsidian" / "申论真题" / "总报告" / "豆包播客代码上传与下载绑定记录.md"
+
+
+def _ensure_record_file():
+    """确保记录文件存在"""
+    if not RECORD_FILE.exists():
+        RECORD_FILE.parent.mkdir(parents=True, exist_ok=True)
+        header = "# 豆包播客上传与下载绑定记录\n\n---\n\n"
+        with open(RECORD_FILE, "w", encoding="utf-8") as f:
+            f.write(header)
+
+
+def _load_chat_url():
+    """从 pipeline_state.json 读取聊天链接"""
+    state_file = Path(__file__).parent / "pipeline_state.json"
+    if state_file.exists():
+        try:
+            with open(state_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data.get("chat_url", "")
+        except Exception:
+            pass
+    return ""
+
+
+def append_download_bind_record(filename: str, chat_url: str = ""):
+    """追加一条下载绑定成功记录"""
+    _ensure_record_file()
+    import time
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    url_line = f"- **聊天链接**: [{chat_url}]({chat_url})\n" if chat_url else ""
+    entry = (
+        f"### [下载绑定] {now}\n\n"
+        f"- **文件名**: `{filename}`\n"
+        f"{url_line}"
+        f"- **状态**: ✅ 绑定成功\n\n"
+        f"---\n\n"
+    )
+    with open(RECORD_FILE, "a", encoding="utf-8") as f:
+        f.write(entry)
+    print(f"  📝 已记录到: {RECORD_FILE.name}")
+
 
 # 自动定位 ffmpeg（支持 scoop 等自定义安装路径）
 FFMPEG_PATH = shutil.which("ffmpeg")
@@ -61,8 +104,28 @@ def wav_to_mp3(wav_path: Path) -> Path:
     return mp3_path
 
 
+def _load_md_mapping():
+    """读取 pipeline 保存的 md_mapping.json（pdf_name -> md_full_path）"""
+    mapping_file = Path(__file__).parent / "md_mapping.json"
+    if mapping_file.exists():
+        try:
+            with open(mapping_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
 def find_md_file(stem: str) -> Path | None:
     """在Obsidian库中查找对应的md文件，支持模糊匹配"""
+    # 0. 优先从 md_mapping.json 精确匹配（避免同名文件在不同文件夹冲突）
+    mapping = _load_md_mapping()
+    for pdf_name, md_path in mapping.items():
+        if Path(md_path).stem == stem:
+            p = Path(md_path)
+            if p.exists():
+                return p
+    
     # 1. 精确匹配
     for md in VAULT.rglob(f"{stem}.md"):
         return md
@@ -86,7 +149,7 @@ def find_md_file(stem: str) -> Path | None:
     return None
 
 
-def embed_podcast(md_path: Path, mp3_name: str):
+def embed_podcast(md_path: Path, mp3_name: str, chat_url: str = ""):
     """在Markdown文件开头插入播客链接"""
     content = md_path.read_text(encoding="utf-8")
     
@@ -105,9 +168,11 @@ def embed_podcast(md_path: Path, mp3_name: str):
     new_content = embed_block + content
     md_path.write_text(new_content, encoding="utf-8")
     print(f"[嵌入] {md_path.name}")
+    # 记录绑定成功
+    append_download_bind_record(mp3_name, chat_url)
 
 
-def process_mp3(mp3_path: Path):
+def process_mp3(mp3_path: Path, chat_url: str = ""):
     """处理单个MP3：查找对应Markdown并嵌入"""
     stem = mp3_path.stem
     
@@ -116,11 +181,16 @@ def process_mp3(mp3_path: Path):
         print(f"[跳过] 找不到对应Markdown: {stem}.md")
         return False
     
-    embed_podcast(md, mp3_path.name)
+    embed_podcast(md, mp3_path.name, chat_url)
     return True
 
 
 def main():
+    # 读取当前聊天链接
+    chat_url = _load_chat_url()
+    if chat_url:
+        print(f"[信息] 当前聊天链接: {chat_url}\n")
+    
     # 1. 处理 WAV 文件（压缩 + 绑定）
     wav_files = sorted(AUDIO_DIR.glob("*.wav"))
     if wav_files:
@@ -128,7 +198,7 @@ def main():
         for wav in wav_files:
             mp3 = wav_to_mp3(wav)
             if mp3:
-                process_mp3(mp3)
+                process_mp3(mp3, chat_url)
             print()
     
     # 2. 处理已有 MP3 文件（仅绑定，跳过已绑定的）
@@ -138,7 +208,7 @@ def main():
     if mp3_to_bind:
         print(f"[信息] 发现 {len(mp3_to_bind)} 个已有 MP3 待绑定\n")
         for mp3 in mp3_to_bind:
-            process_mp3(mp3)
+            process_mp3(mp3, chat_url)
             print()
     
     if not wav_files and not mp3_to_bind:

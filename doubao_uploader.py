@@ -477,22 +477,30 @@ async def click_generate_podcast(page):
     return False
 
 
-async def wait_for_podcast(page, pdf_name: str, timeout: int = DEFAULT_WAIT_TIMEOUT):
+async def wait_for_podcast(page, pdf_name: str, timeout: int = DEFAULT_WAIT_TIMEOUT, expected_base_count: int = None):
     """
     等待豆包生成播客完成。
     在点击"生成播客"前先记录当前播客卡片数量作为基准，
     然后检测是否有**新增**的播客卡片出现。
+    
+    参数:
+        expected_base_count: 外部传入的基准数（解决虚拟滚动导致 DOM 计数不准的问题）。
+                             若提供则优先使用，否则回退到 DOM 查询。
     """
     log(f"等待播客生成完成（超时: {timeout}秒）...")
     start = time.time()
 
     # 获取基准卡片数量（已有的播客）
-    try:
-        base_cards = await page.query_selector_all('[data-plugin-identifier*="receive-podcast-content"]')
-        base_count = len(base_cards)
-        log(f"当前已有播客卡片: {base_count} 个（作为基准）")
-    except Exception:
-        base_count = 0
+    if expected_base_count is not None:
+        base_count = expected_base_count
+        log(f"当前已有播客卡片: {base_count} 个（来自会话计数，作为基准）")
+    else:
+        try:
+            base_cards = await page.query_selector_all('[data-plugin-identifier*="receive-podcast-content"]')
+            base_count = len(base_cards)
+            log(f"当前已有播客卡片: {base_count} 个（来自 DOM 查询，作为基准）")
+        except Exception:
+            base_count = 0
 
     last_count = base_count
     stable_count = 0  # 连续几次检测到相同数量的新卡片

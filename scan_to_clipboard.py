@@ -11,12 +11,12 @@ from datetime import datetime
 
 # 默认扫描目录
 DEFAULT_SCAN_DIR = r"C:\Users\15403\Documents\Obsidian\申论真题"
-# 截止时间（今天12:00）
-CUTOFF_TIME = datetime(2026, 5, 28, 12, 0, 0)
+# 截止时间（今天0:00）
+CUTOFF_TIME = datetime(2026, 5, 29, 0, 0, 0)
 
 
 def scan_md_files(scan_dir):
-    """扫描目录下所有今天12点后修改的 md 文件"""
+    """扫描目录下所有今天0点后修改的 md 文件"""
     paths = []
     scan_path = Path(scan_dir)
     if not scan_path.exists():

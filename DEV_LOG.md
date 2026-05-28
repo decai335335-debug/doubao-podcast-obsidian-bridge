@@ -541,7 +541,108 @@ D:\GitHubDownloads\doubao-podcast-obsidian-bridge\
 
 ---
 
-## 8. 未来优化方向
+## 8. 重大重构（2026-05-28 晚）
+
+### Iteration 19：pipeline 直接控制浏览器生命周期
+
+**问题**：`doubao_pipeline.py` 的 `[a]生成播客` 模式通过 `subprocess.run([python, doubao_uploader.py, ...])` 调用上传器。子进程是"黑盒"，pipeline 无法干预浏览器行为（如页面滚动）。
+
+**重构**：
+1. `doubao_pipeline.py` 直接 `from doubao_uploader import upload_pdf, click_generate_podcast, wait_for_podcast, ensure_chat_open`
+2. 新增 `async def run_generate_flow(pdf_files)` 函数，pipeline 自己管理 `async_playwright()` 上下文
+3. 新增 `async def scroll_to_bottom(page)`，采用三层滚动策略：
+   - 循环滚动 `body` / `documentElement`，检测 `scrollTop` 是否稳定
+   - 找到所有 `overflow-y: auto/scroll` 的容器并滚到底
+   - 模拟 `End` 键兜底
+
+**效果**：pipeline 可以直接在每个 PDF 之间插入滚动、等待等自定义逻辑，不再受限于子进程接口。
+
+---
+
+### Iteration 20：虚拟滚动导致播客检测卡住
+
+**问题**：处理到第 5 个 PDF 时，`wait_for_podcast()` 卡住 120 秒超时。日志显示基准数是 4，但 `current_count` 始终不大于 4。
+
+**根因**：豆包页面使用虚拟滚动，当播客数量超过 4 个后，新播客生成的同时，最旧的一个被从 DOM 中卸载。DOM 中始终只保留 4 个卡片：
+```
+生成前 DOM: [播客1, 播客2, 播客3, 播客4]  → count=4
+生成后 DOM: [播客2, 播客3, 播客4, 播客5]  → count=4
+```
+`current_count (4)` 不大于 `base_count (4)`，轮询永远不满足退出条件。
+
+**用户验证**：手动滑动页面后，程序立即继续。证明虚拟滚动在用户交互后才加载新卡片。
+
+**方案演进**：
+
+| 方案 | 结果 |
+|------|------|
+| 在 `wait_for_podcast` 轮询中加入 `window.scrollTo` | 仍卡住，因为虚拟滚动不是 body 滚动 |
+| 传入 `expected_base_count` 参数避免 DOM 计数 | 基准数对了，但 `current_count` 仍不大于它 |
+| **彻底去掉逐个轮询，改为批量上传+最后统一检测** | ✅ 解决 |
+
+**最终方案**：
+1. `run_generate_flow()` 中不再调用 `wait_for_podcast()` 逐个等待
+2. 点击"生成播客"后，固定等待 10 秒（给豆包时间开始生成），然后 `scroll_to_bottom()`
+3. 直接处理下一个 PDF
+4. 全部上传完成后，统一等待 30 秒，然后一次性获取播客卡片总数
+
+**效果**：27 个 PDF 批量上传，每个间隔约 18 秒，全程无卡顿。最后统一检测时，播客卡片总数与上传数量一致。
+
+---
+
+### Iteration 21：上传/下载绑定记录
+
+**需求**：用户希望有一个持续更新的 markdown 文件，记录每次上传了哪些 PDF、下载绑定了哪些 MP3，方便追溯。
+
+**实现**：
+1. 记录文件：`C:/Users/.../申论真题/总报告/豆包播客代码上传与下载绑定记录.md`
+2. `doubao_pipeline.py` 中：所有 PDF 上传完成后，调用 `write_batch_upload_records()` 一次性批量写入
+3. `post_process.py` 中：每次 MP3 绑定到 Markdown 成功后，调用 `append_download_bind_record()` 追加记录
+
+**格式**：
+```markdown
+### [批量上传] 2026-05-28 23:10:33
+- **聊天链接**: https://www.doubao.com/chat/...
+- **文件数量**: 13 个
+- **文件列表**:
+  - `xxx.pdf`
+  - `yyy.pdf`
+- **状态**: ✅ 全部上传成功
+```
+
+---
+
+### Iteration 22：Markdown 路径精确映射（解决同名冲突）
+
+**问题**：Obsidian 知识库中不同文件夹可能有同名 `.md` 文件（如 `A/plan.md` 和 `B/plan.md`）。`post_process.py` 的 `rglob(f"{stem}.md")` 会找到第一个匹配，可能绑定到错误的文件。
+
+**实现**：
+1. `doubao_pipeline.py` 在 `[a]生成播客` 时，保存 `md_mapping.json`：
+   ```json
+   {
+     "plan.pdf": "C:/Users/.../A/plan.md",
+     "plan_1.pdf": "C:/Users/.../B/plan.md"
+   }
+   ```
+2. `post_process.py` 的 `find_md_file()` 优先读取 `md_mapping.json`，用完整路径直接定位
+3. 没有映射时才回退到 `rglob` 模糊匹配
+
+**效果**：同名文件在不同文件夹时，绑定准确率从"可能错误"提升到 100%。
+
+---
+
+## 9. 踩坑记录（补充）
+
+| # | 问题 | 根因 | 解决方案 | 涉及版本 |
+|---|------|------|---------|---------|
+| 22 | 播客检测卡住 | 虚拟滚动卸载旧卡片，DOM 总数不变 | 去掉逐个轮询，批量上传+最后统一检测 | v2.2 |
+| 23 | 上传记录卡顿 | 逐个 `open(..., 'a')` 写文件 | 收集到列表，最后一次性写入 | v2.2 |
+| 24 | 同名 MD 绑定错误 | `rglob` 找到第一个匹配 | `md_mapping.json` 精确路径映射 | v2.2 |
+| 25 | 600 秒超时太长 | 播客实际 10-20 秒生成 | 改为 120 秒 | v2.2 |
+
+---
+
+## 10. 未来优化方向
 
 1. **单浏览器会话内完成扫描+下载**：目前扫描和下载分两次打开浏览器，可优化为一次会话内先扫描再下载，减少登录态加载时间。
 2. **并发下载**：Playwright 支持多个 `page` 共享一个 `context`，理论上可同时操作多个标签页下载。但豆包可能有反并发限制。
