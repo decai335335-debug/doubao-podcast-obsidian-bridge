@@ -12,7 +12,6 @@ test_upload.py — 豆包 PDF 上传测试工具
 输出：每个文件的上传结果 + 耗时统计
 """
 
-import argparse
 import asyncio
 import json
 import sys
@@ -26,14 +25,12 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from doubao_uploader import (
     upload_pdf,
     ensure_chat_open,
-    load_progress,
-    save_progress,
     log,
     log_success,
     log_error,
     log_warn,
-    PROGRESS_FILE,
 )
+from doubao_pipeline import _get_paths_from_clipboard, _get_paths_from_file
 
 # Playwright
 from playwright.async_api import async_playwright
@@ -213,30 +210,82 @@ async def test_upload_single(page, pdf_path: Path):
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="测试豆包 PDF 上传")
-    parser.add_argument("paths", nargs="+", help="PDF 文件或包含 PDF 的目录")
-    parser.add_argument("--url", default=DEFAULT_URL, help="豆包 URL")
-    parser.add_argument("--interval", type=int, default=5, help="文件间间隔秒数（默认5秒）")
-    args = parser.parse_args()
+    print("=" * 60)
+    print("📋 PDF 上传测试工具")
+    print("=" * 60)
+    print()
+    print("用法：复制 PDF 路径到剪贴板（每行一个），或直接粘贴路径")
+    print()
 
-    # 收集所有 PDF
+    # 获取 PDF 路径
     pdf_files = []
-    for p in args.paths:
-        path = Path(p)
-        if path.is_dir():
-            pdf_files.extend(sorted(path.rglob("*.pdf")))
-        elif path.suffix.lower() == ".pdf":
-            pdf_files.append(path)
 
-    if not pdf_files:
-        print("❌ 未找到 PDF 文件")
+    # 1. 尝试从剪贴板读取
+    clipboard_paths = _get_paths_from_clipboard()
+    if clipboard_paths:
+        print(f"📋 从剪贴板检测到 {len(clipboard_paths)} 个路径:")
+        for i, p in enumerate(clipboard_paths[:10], 1):
+            display = p if len(p) < 70 else p[:67] + "..."
+            print(f"   [{i}] {display}")
+        if len(clipboard_paths) > 10:
+            print(f"   ... 还有 {len(clipboard_paths) - 10} 个")
+        try:
+            use_clipboard = input("\n是否使用剪贴板中的路径? (y/n/f=从文件读取): ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            use_clipboard = 'n'
+        if use_clipboard == 'y':
+            pdf_files = clipboard_paths
+        elif use_clipboard == 'f':
+            default_path = SCRIPT_DIR / "paths.txt"
+            try:
+                file_path = input(f"请输入路径列表文件（默认: {default_path}）: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                file_path = ""
+            if not file_path:
+                file_path = str(default_path)
+            pdf_files = _get_paths_from_file(file_path)
+    else:
+        print("剪贴板为空，请手动粘贴 PDF 路径（每行一个，输入空行结束）:\n")
+        while True:
+            try:
+                line = input("> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                break
+            if not line:
+                break
+            for item in line.split():
+                item = item.strip().strip('"').strip("'")
+                if item:
+                    pdf_files.append(item)
+
+    # 验证并过滤
+    valid_pdfs = []
+    for p in pdf_files:
+        path = Path(p.strip().strip('"').strip("'"))
+        if not path.exists():
+            print(f"⚠️  跳过（不存在）: {path}")
+            continue
+        if path.suffix.lower() != ".pdf":
+            print(f"⚠️  跳过（非 PDF）: {path}")
+            continue
+        valid_pdfs.append(path)
+
+    if not valid_pdfs:
+        print("❌ 未找到有效的 PDF 文件")
         return
+
+    # 设置间隔
+    try:
+        interval_input = input("\n文件间间隔秒数（默认5秒）: ").strip()
+        interval = int(interval_input) if interval_input else 5
+    except (EOFError, KeyboardInterrupt, ValueError):
+        interval = 5
 
     print(f"\n{'='*60}")
     print(f"📋 PDF 上传测试")
     print(f"{'='*60}")
-    print(f"待测试文件数: {len(pdf_files)}")
-    print(f"文件间间隔: {args.interval} 秒")
+    print(f"待测试文件数: {len(valid_pdfs)}")
+    print(f"文件间间隔: {interval} 秒")
     print(f"{'='*60}\n")
 
     results = []
@@ -261,7 +310,7 @@ async def main():
         page.set_default_timeout(30000)
 
         # 打开豆包
-        await page.goto(args.url)
+        await page.goto(DEFAULT_URL)
         await asyncio.sleep(3)
 
         # 确保聊天窗口打开
@@ -290,8 +339,8 @@ async def main():
 
             # 间隔
             if idx < len(pdf_files):
-                print(f"\n  ⏳ 等待 {args.interval} 秒...")
-                await asyncio.sleep(args.interval)
+                print(f"\n  ⏳ 等待 {interval} 秒...")
+                await asyncio.sleep(interval)
 
         # 保存登录态
         try:
