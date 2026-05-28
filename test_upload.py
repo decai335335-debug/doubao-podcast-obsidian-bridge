@@ -320,9 +320,9 @@ async def main():
             return
 
         # 逐个测试上传
-        for idx, pdf_path in enumerate(pdf_files, 1):
+        for idx, pdf_path in enumerate(valid_pdfs, 1):
             print(f"\n{'-'*50}")
-            print(f"[{idx}/{len(pdf_files)}] 测试: {pdf_path.name}")
+            print(f"[{idx}/{len(valid_pdfs)}] 测试: {pdf_path.name}")
             print(f"{'-'*50}")
 
             success, detail = await test_upload_single(page, pdf_path)
