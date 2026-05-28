@@ -631,6 +631,45 @@ D:\GitHubDownloads\doubao-podcast-obsidian-bridge\
 
 ---
 
+### Iteration 23：Windows 终端 GBK 编码崩溃
+
+**问题**：`post_process.py` 处理包含 emoji 的文件名（如 `🎮 从零写...mp3`）时，`print()` 抛出 `UnicodeEncodeError: 'gbk' codec can't encode character '\U0001f3ae'`。
+
+**根因**：Windows 默认终端代码页是 `cp936`（GBK），不支持 Unicode emoji 字符。当 Python 的 `sys.stdout` 用 GBK 编码输出 emoji 时直接崩溃。
+
+**修复**：
+```python
+import io, sys
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+```
+
+将 stdout/stderr 重新包装为 UTF-8 编码，`errors='replace'` 会把无法编码的字符替换成 `?`，不会崩溃。
+
+---
+
+### Iteration 24：绑定记录格式重构
+
+**问题**：每次绑定成功就追加一个独立的 `### [下载绑定]` 条目，记录文件迅速膨胀成几十个小块，难以阅读。
+
+**重构**：
+1. `embed_podcast()` 中不再调用 `append_download_bind_record()` 追加独立条目
+2. `main()` 中收集所有成功绑定的 stems 到 `bound_stems` 列表
+3. 全部绑定完成后，统一调用 `mark_upload_records_as_bound(bound_stems)`
+4. 在记录文件的最近一次 `[批量上传]` 块中，给对应文件行内添加 `✅ 绑定成功`
+
+**效果**：
+```markdown
+### [批量上传] 2026-05-28 23:52:36
+- **文件列表**:
+  - [[xxx]] ✅ 绑定成功
+  - [[yyy]] ✅ 绑定成功
+```
+
+所有状态一目了然，不再有一堆分散的小块。
+
+---
+
 ## 9. 踩坑记录（补充）
 
 | # | 问题 | 根因 | 解决方案 | 涉及版本 |
@@ -639,6 +678,8 @@ D:\GitHubDownloads\doubao-podcast-obsidian-bridge\
 | 23 | 上传记录卡顿 | 逐个 `open(..., 'a')` 写文件 | 收集到列表，最后一次性写入 | v2.2 |
 | 24 | 同名 MD 绑定错误 | `rglob` 找到第一个匹配 | `md_mapping.json` 精确路径映射 | v2.2 |
 | 25 | 600 秒超时太长 | 播客实际 10-20 秒生成 | 改为 120 秒 | v2.2 |
+| 26 | GBK 编码崩溃 | Windows 终端默认 cp936 | stdout 重包装为 UTF-8 | v2.3 |
+| 27 | 记录文件膨胀 | 逐个追加 `[下载绑定]` 小块 | 统一在批量上传块内标记 | v2.3 |
 
 ---
 
