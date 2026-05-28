@@ -1,8 +1,9 @@
 {
-  "chat_url": "https://www.doubao.com/chat/38428092857230082",
+  "chat_url": "https://www.doubao.com/chat/38428061084699394",
   "pdfs": [
     "Unreal Engine 编辑器 8 大面板完全指南.pdf",
     "VibeCoding_六项目深度规划.pdf",
+    "豆包播客代码上传与下载绑定记录.pdf",
     "🎮 从零写一个第一人称冒险游戏 · C++ 编程教学之旅 🎮.pdf",
     "REAPER完全使用指南与效率手册.pdf",
     "plan.pdf",
@@ -28,5 +29,5 @@
     "🎧 Wwise × UE 的 30 个声音冒险故事.pdf",
     "🎮 UE 编辑器八大面板的 30 个冒险故事.pdf"
   ],
-  "last_run": "2026-05-28 20:17:48"
+  "last_run": "2026-05-28 23:52:36"
 }

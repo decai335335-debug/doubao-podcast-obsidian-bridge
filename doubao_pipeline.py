@@ -76,11 +76,23 @@ def append_upload_record(filename: str, chat_url: str):
 
 
 def write_batch_upload_records(filenames: list, chat_url: str):
-    """批量写入上传记录（所有完成后一次性写入，避免逐个写文件卡顿）"""
+    """批量写入上传记录（所有完成后一次性写入，避免逐个写文件卡顿）
+    文件列表使用 Obsidian WikiLink 格式 [[文件名]]，可直接点击跳转到对应 Markdown。"""
     if not filenames:
         return
     _ensure_record_file()
     now = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    # 读取 md_mapping.json，把 PDF 文件名映射回 Markdown 文件名
+    md_mapping = {}
+    mapping_file = SCRIPT_DIR / "md_mapping.json"
+    if mapping_file.exists():
+        try:
+            with open(mapping_file, "r", encoding="utf-8") as f:
+                md_mapping = json.load(f)
+        except Exception:
+            pass
+
     lines = [
         f"### [批量上传] {now}\n\n",
         f"- **聊天链接**: [{chat_url}]({chat_url})\n",
@@ -88,7 +100,12 @@ def write_batch_upload_records(filenames: list, chat_url: str):
         f"- **文件列表**:\n",
     ]
     for name in filenames:
-        lines.append(f"  - `{name}`\n")
+        md_path = md_mapping.get(name)
+        if md_path:
+            md_name = Path(md_path).stem
+            lines.append(f"  - [[{md_name}]]\n")
+        else:
+            lines.append(f"  - `{name}`\n")
     lines.append(f"- **状态**: ✅ 全部上传成功\n\n")
     lines.append("---\n\n")
     with open(RECORD_FILE, "a", encoding="utf-8") as f:
