@@ -8,6 +8,7 @@ post_process.py
     python post_process.py
 """
 
+import io
 import json
 import os
 import re
@@ -15,6 +16,10 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+# 修复 Windows 终端 GBK 编码导致 emoji 输出崩溃
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 VAULT = Path.home() / "Documents" / "Obsidian" / "申论真题"
 AUDIO_DIR = VAULT / "附件" / "音频"
@@ -60,7 +65,7 @@ def append_download_bind_record(filename: str, chat_url: str = ""):
     )
     with open(RECORD_FILE, "a", encoding="utf-8") as f:
         f.write(entry)
-    print(f"  📝 已记录到: {RECORD_FILE.name}")
+    print(f"  [已记录] {RECORD_FILE.name}")
 
 
 # 自动定位 ffmpeg（支持 scoop 等自定义安装路径）
