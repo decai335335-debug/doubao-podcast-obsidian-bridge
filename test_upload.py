@@ -41,7 +41,8 @@ STATE_FILE = SCRIPT_DIR / "doubao_state.json"
 
 async def test_upload_single(page, pdf_path: Path):
     """
-    测试上传单个 PDF，详细记录每一步的耗时和结果。
+    测试上传单个 PDF，直接复用 doubao_uploader.py 的 upload_pdf 函数，
+    详细记录每一步的耗时和结果。
     返回: (success: bool, detail: dict)
     """
     detail = {
@@ -51,163 +52,24 @@ async def test_upload_single(page, pdf_path: Path):
     }
     overall_start = time.time()
 
-    # 步骤1: 点击 "+" 按钮
+    # 直接调用 doubao_uploader.py 中验证过的 upload_pdf 函数
     step_start = time.time()
-    log(f"[测试] 步骤1: 点击 '+' 按钮...")
+    log(f"[测试] 调用 upload_pdf: {pdf_path.name}...")
 
-    # 先尝试点击 "+"
-    plus_clicked = False
-    for attempt in range(3):
-        try:
-            clicked = await page.evaluate(
-                """
-                () => {
-                    const SIDEBAR_WIDTH = 320;
-                    const all = document.querySelectorAll('button, div, svg');
-                    for (const el of all) {
-                        const rect = el.getBoundingClientRect();
-                        const text = (el.textContent || el.innerText || '').trim();
-                        const aria = el.getAttribute('aria-label') || '';
-                        const cls = (el.getAttribute('class') || '');
-                        if (rect.left > SIDEBAR_WIDTH && rect.width > 0 && rect.height > 0) {
-                            if (text === '+' || aria.includes('添加') || cls.includes('plus') || cls.includes('add')) {
-                                el.click();
-                                return {found: true, text: text || aria, left: rect.left, top: rect.top};
-                            }
-                        }
-                    }
-                    return {found: false};
-                }
-                """
-            )
-            if clicked and clicked.get("found"):
-                log(f"  ✓ 第 {attempt + 1} 次点击 '+' 成功: {clicked}")
-                plus_clicked = True
-                break
-            else:
-                log(f"  ⚠ 第 {attempt + 1} 次未找到 '+'，重试...")
-                await asyncio.sleep(2)
-        except Exception as e:
-            log_warn(f"  点击 '+' 出错: {e}")
-            await asyncio.sleep(2)
+    upload_success = await upload_pdf(page, pdf_path)
 
     detail["steps"].append({
-        "name": "点击 '+'",
-        "success": plus_clicked,
-        "duration_sec": round(time.time() - step_start, 2),
-    })
-
-    if not plus_clicked:
-        detail["overall_sec"] = round(time.time() - overall_start, 2)
-        detail["success"] = False
-        detail["fail_reason"] = "点击 '+' 按钮失败"
-        return False, detail
-
-    # 步骤2: 等待菜单弹出
-    step_start = time.time()
-    log(f"[测试] 步骤2: 等待菜单弹出...")
-
-    menu_found = False
-    for attempt in range(10):
-        try:
-            upload_locator = page.get_by_text("上传文件或图片")
-            count = await upload_locator.count()
-            if count > 0:
-                log(f"  ✓ 检测到菜单（'上传文件或图片'已出现）")
-                menu_found = True
-                break
-            else:
-                log(f"  ... 等待菜单 ({attempt + 1}/10)")
-                await asyncio.sleep(1)
-        except Exception as e:
-            log_warn(f"  检测菜单出错: {e}")
-            await asyncio.sleep(1)
-
-    detail["steps"].append({
-        "name": "等待菜单弹出",
-        "success": menu_found,
-        "duration_sec": round(time.time() - step_start, 2),
-    })
-
-    if not menu_found:
-        detail["overall_sec"] = round(time.time() - overall_start, 2)
-        detail["success"] = False
-        detail["fail_reason"] = "菜单未弹出"
-        return False, detail
-
-    # 步骤3: 通过 filechooser 上传
-    step_start = time.time()
-    log(f"[测试] 步骤3: filechooser 上传...")
-
-    upload_success = False
-    try:
-        async with page.expect_file_chooser(timeout=10000) as fc_info:
-            upload_locator = page.get_by_text("上传文件或图片")
-            count = await upload_locator.count()
-            if count > 0:
-                await upload_locator.first.click(timeout=3000)
-            else:
-                raise Exception("上传按钮消失")
-
-        filechooser = await fc_info.value
-        await filechooser.set_files(str(pdf_path))
-        log(f"  ✓ filechooser 上传成功: {pdf_path.name}")
-        upload_success = True
-    except Exception as e:
-        log_error(f"  filechooser 上传失败: {e}")
-
-    detail["steps"].append({
-        "name": "filechooser 上传",
+        "name": "upload_pdf 完整上传",
         "success": upload_success,
         "duration_sec": round(time.time() - step_start, 2),
     })
 
-    # 步骤4: 等待上传完成（检测 PDF 卡片出现）
-    step_start = time.time()
-    log(f"[测试] 步骤4: 等待 PDF 卡片出现...")
-
-    card_found = False
-    for attempt in range(20):
-        try:
-            # 查找页面上包含 PDF 文件名的元素
-            pdf_name = pdf_path.stem
-            found = await page.evaluate(
-                f"""
-                () => {{
-                    const all = document.querySelectorAll('*');
-                    for (const el of all) {{
-                        const text = (el.textContent || el.innerText || '').trim();
-                        if (text.includes('{pdf_name.replace("'", "\\'")}')) {{
-                            return {{found: true, text: text.slice(0, 50)}};
-                        }}
-                    }}
-                    return {{found: false}};
-                }}
-                """
-            )
-            if found and found.get("found"):
-                log(f"  ✓ PDF 卡片已出现")
-                card_found = True
-                break
-            else:
-                log(f"  ... 等待 PDF 卡片 ({attempt + 1}/20)")
-                await asyncio.sleep(1)
-        except Exception as e:
-            log_warn(f"  检测 PDF 卡片出错: {e}")
-            await asyncio.sleep(1)
-
-    detail["steps"].append({
-        "name": "等待 PDF 卡片",
-        "success": card_found,
-        "duration_sec": round(time.time() - step_start, 2),
-    })
-
     detail["overall_sec"] = round(time.time() - overall_start, 2)
-    detail["success"] = upload_success and card_found
-    if not detail["success"]:
-        detail["fail_reason"] = detail["steps"][-1]["name"] + " 失败"
+    detail["success"] = upload_success
+    if not upload_success:
+        detail["fail_reason"] = "upload_pdf 返回失败"
 
-    return detail["success"], detail
+    return upload_success, detail
 
 
 async def main():
