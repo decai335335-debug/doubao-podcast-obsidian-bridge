@@ -121,6 +121,7 @@ class DoubaoFrontend(tk.Tk):
         self.bound_markdown_index = None
         self.login_confirm_event = None
         self.login_confirmed = False
+        self.tool_log_texts = {}
         log_dir = APP_DIR / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         self.log_file = log_dir / f"frontend_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
@@ -319,6 +320,32 @@ class DoubaoFrontend(tk.Tk):
         content.pack(fill=tk.BOTH, expand=True, pady=(14, 0))
         return frame, content
 
+    def _build_tool_log_panel(self, parent, key, title):
+        frame = ttk.LabelFrame(parent, text=title, padding=10, style="Panel.TLabelframe")
+        frame.pack(fill=tk.BOTH, expand=False, pady=(12, 0))
+        header = ttk.Frame(frame, style="Surface.TFrame")
+        header.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(header, text="该工具的输出只显示在这里。", style="Subtle.TLabel").pack(side=tk.LEFT)
+        ttk.Button(header, text="清空日志", command=lambda name=key: self.clear_tool_log(name)).pack(side=tk.RIGHT)
+        text = tk.Text(
+            frame,
+            height=9,
+            wrap=tk.WORD,
+            font=("Consolas", 10),
+            bg=self.colors["log_bg"],
+            fg=self.colors["log_fg"],
+            insertbackground=self.colors["log_fg"],
+            relief=tk.FLAT,
+            padx=12,
+            pady=10,
+        )
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=text.yview)
+        text.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tool_log_texts[key] = text
+        return text
+
     def _build_video_sub_tool(self, parent):
         frame, content = self._build_tool_shell(
             parent,
@@ -339,6 +366,23 @@ class DoubaoFrontend(tk.Tk):
         self.video_sub_links_text = tk.Text(input_group, height=12, wrap=tk.WORD, font=("Consolas", 10))
         self.video_sub_links_text.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
 
+        result_group = ttk.LabelFrame(left, text="字幕 Markdown 结果", padding=12, style="Panel.TLabelframe")
+        result_group.pack(fill=tk.BOTH, expand=True, pady=(12, 0))
+        result_top = ttk.Frame(result_group, style="Surface.TFrame")
+        result_top.pack(fill=tk.X)
+        ttk.Button(result_top, text="刷新结果", command=self.refresh_video_sub_results).pack(side=tk.LEFT)
+        ttk.Button(result_top, text="打开选中文件", command=self.open_selected_video_sub_result).pack(side=tk.LEFT, padx=(8, 0))
+        result_columns = ("modified", "path")
+        self.video_sub_output_files = {}
+        self.video_sub_result_tree = ttk.Treeview(result_group, columns=result_columns, show="headings", selectmode="browse", height=8)
+        self.video_sub_result_tree.heading("modified", text="时间")
+        self.video_sub_result_tree.heading("path", text="文件")
+        self.video_sub_result_tree.column("modified", width=145, minwidth=120, stretch=False)
+        self.video_sub_result_tree.column("path", width=520, minwidth=260)
+        self.video_sub_result_tree.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
+        self.video_sub_result_tree.bind("<Double-1>", lambda _event: self.open_selected_video_sub_result())
+        self.video_sub_result_tree.bind("<Button-3>", self.on_video_sub_result_right_click)
+
         settings = ttk.LabelFrame(right, text="下载与账号", padding=16, style="Panel.TLabelframe")
         settings.pack(fill=tk.X)
         self.video_sub_sessdata_var = tk.StringVar(value="")
@@ -351,7 +395,10 @@ class DoubaoFrontend(tk.Tk):
         self.video_sub_asr_var = tk.BooleanVar(value=False)
 
         ttk.Label(settings, text="Bilibili SESSDATA（可留空使用 config.py）").pack(anchor=tk.W)
-        ttk.Entry(settings, textvariable=self.video_sub_sessdata_var, show="*").pack(fill=tk.X, pady=(5, 10))
+        sess_row = ttk.Frame(settings, style="Surface.TFrame")
+        sess_row.pack(fill=tk.X, pady=(5, 10))
+        ttk.Entry(sess_row, textvariable=self.video_sub_sessdata_var, show="*").pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(sess_row, text="确认保存", command=self.save_video_sub_sessdata).pack(side=tk.LEFT, padx=(8, 0))
 
         grid = ttk.Frame(settings, style="Surface.TFrame")
         grid.pack(fill=tk.X)
@@ -391,6 +438,8 @@ class DoubaoFrontend(tk.Tk):
             style="Subtle.TLabel",
             wraplength=520,
         ).pack(anchor=tk.W, pady=(12, 0))
+        self._build_tool_log_panel(right, "video_sub", "Video Sub 运行日志")
+        self.after(600, self.refresh_video_sub_results)
         return frame
 
     def _build_github_downloader_tool(self, parent):
@@ -410,9 +459,15 @@ class DoubaoFrontend(tk.Tk):
         out_row.pack(fill=tk.X, pady=(5, 10))
         ttk.Entry(out_row, textvariable=self.github_output_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(out_row, text="选择目录", command=self.choose_github_output_dir).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(group, text="开始下载", style="Primary.TButton", command=self.start_github_download).pack(
-            fill=tk.X, ipady=6
+        github_actions = ttk.Frame(group, style="Surface.TFrame")
+        github_actions.pack(fill=tk.X)
+        ttk.Button(github_actions, text="开始下载", style="Primary.TButton", command=self.start_github_download).pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8), ipady=6
         )
+        ttk.Button(github_actions, text="打开保存目录", command=self.open_github_output_dir).pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0), ipady=6
+        )
+        self._build_tool_log_panel(group, "github_downloader", "GitHub 下载器运行日志")
         return frame
 
     def _build_auto_unzip_tool(self, parent):
@@ -437,12 +492,14 @@ class DoubaoFrontend(tk.Tk):
         ttk.Button(row, text="选择压缩包解压", command=self.start_auto_unzip_files).pack(
             side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0), ipady=5
         )
+        ttk.Button(group, text="打开当前解压目录", command=self.open_unzip_folder).pack(fill=tk.X, pady=(10, 0), ipady=5)
         ttk.Label(
             group,
             text="会调用 auto-unzip 原项目脚本。成功解压后，原脚本会按自己的规则删除源压缩包。",
             style="Subtle.TLabel",
             wraplength=760,
         ).pack(anchor=tk.W, pady=(12, 0))
+        self._build_tool_log_panel(content, "auto_unzip", "Auto Unzip 运行日志")
         return frame
 
     def _build_left_panel(self, parent):
@@ -655,7 +712,7 @@ class DoubaoFrontend(tk.Tk):
         self.log_text.configure(yscrollcommand=log_scrollbar.set)
         log_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-    def _run_external_command(self, title, cmd, cwd=None, stdin_text=None, env=None):
+    def _run_external_command(self, title, cmd, cwd=None, stdin_text=None, env=None, log_key=None, refresh_after=False):
         if self.worker_thread and self.worker_thread.is_alive():
             messagebox.showinfo("任务运行中", "当前已有任务在运行。")
             return
@@ -665,10 +722,10 @@ class DoubaoFrontend(tk.Tk):
         self.status_var.set(f"{title} 运行中")
         if hasattr(self, "notebook"):
             self.notebook.select(2)
-        self._append_log(f"\n[{title}] 命令: {self._masked_command_text(cmd)}\n")
+        self._append_tool_log(log_key, f"\n[{title}] 命令: {self._masked_command_text(cmd)}\n")
         self.worker_thread = threading.Thread(
             target=self._external_command_worker,
-            args=(title, cmd, cwd, stdin_text, env),
+            args=(title, cmd, cwd, stdin_text, env, log_key, refresh_after),
             daemon=True,
         )
         self.worker_thread.start()
@@ -687,7 +744,7 @@ class DoubaoFrontend(tk.Tk):
                 hide_next = True
         return " ".join(masked)
 
-    def _external_command_worker(self, title, cmd, cwd, stdin_text, env):
+    def _external_command_worker(self, title, cmd, cwd, stdin_text, env, log_key, refresh_after):
         ok = False
         try:
             self.current_process = subprocess.Popen(
@@ -705,21 +762,34 @@ class DoubaoFrontend(tk.Tk):
                 self.current_process.stdin.write(stdin_text)
                 self.current_process.stdin.close()
             for line in self.current_process.stdout or []:
-                self.log_queue.put(("log", line))
+                self.log_queue.put(("tool_log", {"key": log_key, "text": line}))
             code = self.current_process.wait()
             ok = code == 0
-            self.log_queue.put(("log", f"\n[{title}] 退出码: {code}\n"))
+            self.log_queue.put(("tool_log", {"key": log_key, "text": f"\n[{title}] 退出码: {code}\n"}))
         except Exception as exc:
-            self.log_queue.put(("log", f"\n[{title}错误] {exc}\n"))
+            self.log_queue.put(("tool_log", {"key": log_key, "text": f"\n[{title}错误] {exc}\n"}))
         finally:
             self.current_process = None
-            self.log_queue.put(("done", ok))
+            self.log_queue.put(("done", {"ok": ok, "refresh": refresh_after, "log_key": log_key}))
 
     def _python_or_warn(self):
         if HELPER_PYTHON:
             return HELPER_PYTHON
         messagebox.showerror("缺少 Python", "找不到可用 python.exe，请设置 DOUBAO_PYTHON_EXE。")
         return ""
+
+    def _append_tool_log(self, key, text):
+        if key and key in self.tool_log_texts:
+            widget = self.tool_log_texts[key]
+            widget.insert(tk.END, text)
+            widget.see(tk.END)
+            return
+        self._append_log(text)
+
+    def clear_tool_log(self, key):
+        widget = self.tool_log_texts.get(key)
+        if widget:
+            widget.delete("1.0", tk.END)
 
     def _video_sub_urls(self):
         text = self.video_sub_links_text.get("1.0", tk.END)
@@ -788,6 +858,7 @@ class DoubaoFrontend(tk.Tk):
             cmd,
             cwd=tool_dir,
             env=env,
+            log_key="video_sub",
         )
 
     def open_video_sub_output_dir(self):
@@ -797,10 +868,133 @@ class DoubaoFrontend(tk.Tk):
             return
         messagebox.showinfo("输出目录", "输出目录沿用 video-sub-md/config.py 的 DEFAULT_OUTPUT_DIR。当前没有读取到已存在目录。")
 
-    def _video_sub_config_value(self, name):
+    def refresh_video_sub_results(self):
+        if not hasattr(self, "video_sub_result_tree"):
+            return
+        output_dir = self._video_sub_config_value("DEFAULT_OUTPUT_DIR")
+        self.video_sub_result_tree.delete(*self.video_sub_result_tree.get_children())
+        self.video_sub_output_files.clear()
+        if not output_dir:
+            return
+        root = Path(output_dir)
+        if not root.exists():
+            return
+        files = []
+        try:
+            for path in root.rglob("*.md"):
+                try:
+                    files.append((path.stat().st_mtime, path))
+                except Exception:
+                    pass
+        except Exception as exc:
+            self._append_tool_log("video_sub", f"[结果] 扫描输出目录失败: {exc}\n")
+            return
+        files.sort(key=lambda item: item[0], reverse=True)
+        for index, (timestamp, path) in enumerate(files[:120]):
+            iid = f"video_sub_result::{index}"
+            self.video_sub_output_files[iid] = path
+            try:
+                rel = path.relative_to(root)
+            except ValueError:
+                rel = path
+            self.video_sub_result_tree.insert(
+                "",
+                tk.END,
+                iid=iid,
+                values=(datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M"), str(rel)),
+            )
+
+    def open_selected_video_sub_result(self):
+        if not hasattr(self, "video_sub_result_tree"):
+            return
+        iid = self.video_sub_result_tree.focus()
+        path = self.video_sub_output_files.get(iid)
+        if not path:
+            return
+        try:
+            os.startfile(str(path))
+        except Exception as exc:
+            messagebox.showerror("打开失败", str(exc))
+
+    def on_video_sub_result_right_click(self, event):
+        iid = self.video_sub_result_tree.identify_row(event.y)
+        if not iid:
+            return
+        self.video_sub_result_tree.focus(iid)
+        self.video_sub_result_tree.selection_set(iid)
+        path = self.video_sub_output_files.get(iid)
+        if not path:
+            return
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label="打开 Markdown", command=lambda: os.startfile(str(path)))
+        menu.add_command(label="在资源管理器中打开位置", command=lambda: self.open_folder(path.parent))
+        menu.add_command(label="复制文件路径", command=lambda: self.copy_text(str(path), "已复制文件路径"))
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def open_folder(self, path):
+        path = Path(path)
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            os.startfile(str(path))
+        except Exception as exc:
+            messagebox.showerror("打开失败", str(exc))
+
+    def open_github_output_dir(self):
+        self.open_folder(self.github_output_var.get().strip() or Path.home())
+
+    def open_unzip_folder(self):
+        self.open_folder(self.unzip_folder_var.get().strip() or Path.home())
+
+    def save_video_sub_sessdata(self):
+        sessdata = self.video_sub_sessdata_var.get().strip()
+        if not sessdata:
+            messagebox.showwarning("缺少 SESSDATA", "请先输入新的 Bilibili SESSDATA。")
+            return
+        targets = []
+        current_config = self._video_sub_config_path()
+        if current_config:
+            targets.append(current_config)
+        source_config = EXTERNAL_TOOLS["video_sub"]["path"] / "config.py"
+        if source_config.exists() and source_config not in targets:
+            targets.append(source_config)
+        saved = []
+        failed = []
+        for config_path in targets:
+            ok, message = self._write_video_sub_sessdata(config_path, sessdata)
+            if ok:
+                saved.append(str(config_path))
+            else:
+                failed.append(f"{config_path}: {message}")
+        if saved:
+            self.status_var.set("Video Sub SESSDATA 已保存")
+            self._append_log("[Video Sub] SESSDATA 已保存到 config.py\n")
+            messagebox.showinfo("保存成功", "已更新 SESSDATA:\n\n" + "\n".join(saved))
+        if failed:
+            messagebox.showwarning("部分保存失败", "\n".join(failed))
+
+    def _write_video_sub_sessdata(self, config_path, sessdata):
+        try:
+            text = Path(config_path).read_text(encoding="utf-8")
+            backup = Path(config_path).with_suffix(f".py.bak_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+            backup.write_text(text, encoding="utf-8")
+            replacement = f'DEFAULT_SESSDATA = {json.dumps(sessdata, ensure_ascii=False)}'
+            if re.search(r"^DEFAULT_SESSDATA\s*=", text, flags=re.MULTILINE):
+                text = re.sub(r"^DEFAULT_SESSDATA\s*=.*$", replacement, text, count=1, flags=re.MULTILINE)
+            else:
+                text += "\n\n# Bilibili SESSDATA\n" + replacement + "\n"
+            Path(config_path).write_text(text, encoding="utf-8")
+            return True, ""
+        except Exception as exc:
+            return False, str(exc)
+
+    def _video_sub_config_path(self):
         tool_dir = self._external_tool_dir("video_sub")
         config_path = tool_dir / "config.py"
-        if not config_path.exists():
+        return config_path if config_path.exists() else None
+
+    def _video_sub_config_value(self, name):
+        config_path = self._video_sub_config_path()
+        if not config_path or not config_path.exists():
             return ""
         try:
             text = config_path.read_text(encoding="utf-8", errors="ignore")
@@ -830,7 +1024,7 @@ class DoubaoFrontend(tk.Tk):
         output_dir = self.github_output_var.get().strip()
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         cmd = [python_exe, str(script), "--links", "\n".join(links)]
-        self._run_external_command("GitHub 下载器", cmd, cwd=tool_dir, stdin_text=f"{output_dir}\n")
+        self._run_external_command("GitHub 下载器", cmd, cwd=tool_dir, stdin_text=f"{output_dir}\n", log_key="github_downloader")
 
     def choose_unzip_folder(self):
         path = filedialog.askdirectory(initialdir=self.unzip_folder_var.get() or str(Path.home()))
@@ -847,7 +1041,7 @@ class DoubaoFrontend(tk.Tk):
         if not Path(folder).is_dir():
             messagebox.showwarning("目录不存在", "请选择一个存在的文件夹。")
             return
-        self._run_external_command("Auto Unzip", [python_exe, str(script), folder], cwd=tool_dir)
+        self._run_external_command("Auto Unzip", [python_exe, str(script), folder], cwd=tool_dir, log_key="auto_unzip")
 
     def start_auto_unzip_files(self):
         python_exe = self._python_or_warn()
@@ -861,7 +1055,7 @@ class DoubaoFrontend(tk.Tk):
         )
         if not files:
             return
-        self._run_external_command("Auto Unzip", [python_exe, str(script), *files], cwd=tool_dir)
+        self._run_external_command("Auto Unzip", [python_exe, str(script), *files], cwd=tool_dir, log_key="auto_unzip")
 
     def choose_vault(self):
         path = filedialog.askdirectory(initialdir=self.vault_var.get() or str(Path.home()))
@@ -1965,6 +2159,8 @@ class DoubaoFrontend(tk.Tk):
                 kind, payload = self.log_queue.get_nowait()
                 if kind == "log":
                     self._append_log(payload)
+                elif kind == "tool_log":
+                    self._append_tool_log(payload.get("key"), payload.get("text", ""))
                 elif kind == "b_scanned":
                     self._apply_scanned_podcasts(payload["url"], payload["podcasts"])
                 elif kind == "login_confirm":
@@ -1975,14 +2171,25 @@ class DoubaoFrontend(tk.Tk):
                     if self.login_confirm_event:
                         self.login_confirm_event.set()
                 elif kind == "done":
+                    if isinstance(payload, dict):
+                        ok = bool(payload.get("ok"))
+                        refresh = bool(payload.get("refresh"))
+                        log_key = payload.get("log_key")
+                    else:
+                        ok = bool(payload)
+                        refresh = True
+                        log_key = None
                     self.progress.stop()
                     self.start_button.configure(state=tk.NORMAL)
                     self.stop_button.configure(state=tk.DISABLED)
                     self.current_process = None
                     pipeline.clear_stop_request()
-                    self.status_var.set("任务完成" if payload else "任务结束：存在失败或中断")
-                    self._append_log("\n[任务] 流程结束\n")
-                    self.after(300, self.refresh_all)
+                    self.status_var.set("任务完成" if ok else "任务结束：存在失败或中断")
+                    self._append_tool_log(log_key, "\n[任务] 流程结束\n")
+                    if log_key == "video_sub":
+                        self.after(300, self.refresh_video_sub_results)
+                    if refresh:
+                        self.after(300, self.refresh_all)
         except queue.Empty:
             pass
         self.after(100, self._drain_log_queue)
