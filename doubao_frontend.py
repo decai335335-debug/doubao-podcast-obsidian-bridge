@@ -81,8 +81,9 @@ class DoubaoFrontend(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("豆包播客桥接工具")
-        self.geometry("1180x760")
-        self.minsize(980, 640)
+        self.geometry("1280x820")
+        self.minsize(1080, 700)
+        self.configure(bg="#F5F3EE")
 
         self.scanned_items = []
         self.selected_paths = set()
@@ -152,43 +153,79 @@ class DoubaoFrontend(tk.Tk):
     def _setup_style(self):
         style = ttk.Style(self)
         style.theme_use("clam")
-        style.configure(".", font=("Microsoft YaHei UI", 10))
-        style.configure("Title.TLabel", font=("Microsoft YaHei UI", 17, "bold"))
-        style.configure("Subtle.TLabel", foreground="#687385")
-        style.configure("Primary.TButton", font=("Microsoft YaHei UI", 10, "bold"))
-        style.configure("Treeview", rowheight=30, font=("Microsoft YaHei UI", 10))
-        style.configure("Treeview.Heading", font=("Microsoft YaHei UI", 10, "bold"))
+        self.colors = {
+            "bg": "#F5F3EE",
+            "surface": "#FFFFFF",
+            "border": "#D9D4C8",
+            "text": "#1E2430",
+            "muted": "#667085",
+            "primary": "#2F6B5F",
+            "primary_hover": "#285B51",
+            "danger": "#B42318",
+            "log_bg": "#111827",
+            "log_fg": "#E5E7EB",
+        }
+        style.configure(".", font=("Microsoft YaHei UI", 10), background=self.colors["bg"], foreground=self.colors["text"])
+        style.configure("App.TFrame", background=self.colors["bg"])
+        style.configure("Surface.TFrame", background=self.colors["surface"])
+        style.configure("TLabel", background=self.colors["surface"], foreground=self.colors["text"])
+        style.configure("TRadiobutton", background=self.colors["surface"], foreground=self.colors["text"])
+        style.map("TRadiobutton", background=[("active", self.colors["surface"])])
+        style.configure("Panel.TLabelframe", background=self.colors["surface"], bordercolor=self.colors["border"], relief=tk.SOLID)
+        style.configure("Panel.TLabelframe.Label", background=self.colors["bg"], foreground=self.colors["text"], font=("Microsoft YaHei UI", 10, "bold"))
+        style.configure("Title.TLabel", background=self.colors["bg"], foreground=self.colors["text"], font=("Microsoft YaHei UI", 20, "bold"))
+        style.configure("Subtitle.TLabel", background=self.colors["bg"], foreground=self.colors["muted"], font=("Microsoft YaHei UI", 10))
+        style.configure("Section.TLabel", background=self.colors["surface"], foreground=self.colors["text"], font=("Microsoft YaHei UI", 12, "bold"))
+        style.configure("Subtle.TLabel", background=self.colors["surface"], foreground=self.colors["muted"])
+        style.configure("Status.TLabel", background="#E7F0EC", foreground=self.colors["primary"], padding=(10, 4), font=("Microsoft YaHei UI", 9, "bold"))
+        style.configure("TButton", background="#EFECE5", foreground=self.colors["text"], bordercolor=self.colors["border"], focusthickness=0, padding=(10, 7))
+        style.map("TButton", background=[("active", "#E4E0D7")])
+        style.configure("Primary.TButton", background=self.colors["primary"], foreground="#FFFFFF", font=("Microsoft YaHei UI", 10, "bold"), padding=(10, 9))
+        style.map("Primary.TButton", background=[("active", self.colors["primary_hover"]), ("disabled", "#D7D3CA")], foreground=[("disabled", "#8A8175")])
+        style.configure("Danger.TButton", background="#FEE4E2", foreground=self.colors["danger"], padding=(10, 8))
+        style.map("Danger.TButton", background=[("active", "#FCD5D2")])
+        style.configure("TNotebook", background=self.colors["surface"], borderwidth=0)
+        style.configure("TNotebook.Tab", background="#ECE8DE", foreground=self.colors["muted"], padding=(14, 8), font=("Microsoft YaHei UI", 10, "bold"))
+        style.map("TNotebook.Tab", background=[("selected", "#FFFFFF")], foreground=[("selected", self.colors["text"])])
+        style.configure("Treeview", background="#FFFFFF", fieldbackground="#FFFFFF", foreground=self.colors["text"], bordercolor=self.colors["border"], rowheight=32, font=("Microsoft YaHei UI", 10))
+        style.configure("Treeview.Heading", background="#F0EEE8", foreground=self.colors["text"], relief=tk.FLAT, font=("Microsoft YaHei UI", 10, "bold"))
+        style.map("Treeview", background=[("selected", "#DDEBE6")], foreground=[("selected", self.colors["text"])])
 
     def _build_ui(self):
-        root = ttk.Frame(self, padding=14)
+        root = ttk.Frame(self, padding=16, style="App.TFrame")
         root.pack(fill=tk.BOTH, expand=True)
 
-        header = ttk.Frame(root)
+        header = ttk.Frame(root, style="App.TFrame")
         header.pack(fill=tk.X)
-        ttk.Label(header, text="豆包播客桥接工具", style="Title.TLabel").pack(side=tk.LEFT)
+        title_block = ttk.Frame(header, style="App.TFrame")
+        title_block.pack(side=tk.LEFT)
+        ttk.Label(title_block, text="豆包播客桥接工具", style="Title.TLabel").pack(anchor=tk.W)
+        ttk.Label(
+            title_block,
+            text="扫描 Markdown、生成播客、下载音频并绑定回 Obsidian",
+            style="Subtitle.TLabel",
+        ).pack(anchor=tk.W, pady=(3, 0))
         ttk.Label(
             header,
             textvariable=self.status_var,
-            style="Subtle.TLabel",
-        ).pack(side=tk.RIGHT)
+            style="Status.TLabel",
+        ).pack(side=tk.RIGHT, anchor=tk.N, pady=(4, 0))
 
         body = ttk.PanedWindow(root, orient=tk.HORIZONTAL)
-        body.pack(fill=tk.BOTH, expand=True, pady=(14, 10))
+        body.pack(fill=tk.BOTH, expand=True, pady=(16, 0))
 
-        left = ttk.Frame(body, width=280)
-        middle = ttk.Frame(body)
-        right = ttk.Frame(body, width=260)
+        left = ttk.Frame(body, width=300, style="App.TFrame")
+        middle = ttk.Frame(body, style="App.TFrame")
         body.add(left, weight=0)
         body.add(middle, weight=1)
-        body.add(right, weight=0)
 
         self._build_left_panel(left)
+        self._build_action_panel(middle)
         self._build_file_table(middle)
         self._build_log_panel(middle)
-        self._build_action_panel(right)
 
     def _build_left_panel(self, parent):
-        group = ttk.LabelFrame(parent, text="文件来源", padding=12)
+        group = ttk.LabelFrame(parent, text="仓库与筛选", padding=14, style="Panel.TLabelframe")
         group.pack(fill=tk.BOTH, expand=True)
 
         ttk.Label(group, text="Obsidian 仓库").pack(anchor=tk.W)
@@ -215,22 +252,29 @@ class DoubaoFrontend(tk.Tk):
         ttk.Button(group, text="清空选择", command=self.clear_selection).pack(fill=tk.X, pady=2)
 
         ttk.Separator(group).pack(fill=tk.X, pady=16)
-        ttk.Label(group, text="列表按最新添加/修改时间从新到旧排列。", style="Subtle.TLabel", wraplength=230).pack(
+        ttk.Label(
+            group,
+            text="A 列表显示已绑定、已生成、未生成；B 清单从历史 JSON 读取。",
+            style="Subtle.TLabel",
+            wraplength=240,
+        ).pack(
             anchor=tk.W
         )
 
     def _build_file_table(self, parent):
-        self.notebook = ttk.Notebook(parent)
-        self.notebook.pack(fill=tk.BOTH, expand=True)
+        table_frame = ttk.Frame(parent, style="Surface.TFrame")
+        table_frame.pack(fill=tk.BOTH, expand=True, pady=(12, 0))
+        self.notebook = ttk.Notebook(table_frame)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
 
-        markdown_tab = ttk.Frame(self.notebook, padding=(0, 8, 0, 0))
-        podcast_tab = ttk.Frame(self.notebook, padding=(0, 8, 0, 0))
+        markdown_tab = ttk.Frame(self.notebook, padding=(12, 12, 12, 10), style="Surface.TFrame")
+        podcast_tab = ttk.Frame(self.notebook, padding=(12, 12, 12, 10), style="Surface.TFrame")
         self.notebook.add(markdown_tab, text="A Markdown")
         self.notebook.add(podcast_tab, text="B 播客状态")
 
-        top = ttk.Frame(markdown_tab)
+        top = ttk.Frame(markdown_tab, style="Surface.TFrame")
         top.pack(fill=tk.X)
-        ttk.Label(top, text="Markdown 文件列表", font=("Microsoft YaHei UI", 12, "bold")).pack(side=tk.LEFT)
+        ttk.Label(top, text="Markdown 文件列表", style="Section.TLabel").pack(side=tk.LEFT)
         ttk.Label(top, textvariable=self.selected_count_var, style="Subtle.TLabel").pack(side=tk.RIGHT)
 
         columns = ("checked", "status", "name", "modified", "path")
@@ -252,10 +296,13 @@ class DoubaoFrontend(tk.Tk):
         scrollbar = ttk.Scrollbar(markdown_tab, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tree.tag_configure("status_bound", foreground="#2F6B5F")
+        self.tree.tag_configure("status_generated", foreground="#B56A2A")
+        self.tree.tag_configure("status_pending", foreground="#667085")
 
-        btop = ttk.Frame(podcast_tab)
+        btop = ttk.Frame(podcast_tab, style="Surface.TFrame")
         btop.pack(fill=tk.X)
-        ttk.Label(btop, text="豆包链接播客清单（按新到旧）", font=("Microsoft YaHei UI", 12, "bold")).pack(side=tk.LEFT)
+        ttk.Label(btop, text="豆包链接播客清单（按新到旧）", style="Section.TLabel").pack(side=tk.LEFT)
         ttk.Label(btop, textvariable=self.b_count_var, style="Subtle.TLabel").pack(side=tk.RIGHT)
 
         podcast_columns = ("checked", "status", "title", "duration")
@@ -280,8 +327,11 @@ class DoubaoFrontend(tk.Tk):
         podcast_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
     def _build_action_panel(self, parent):
-        group = ttk.LabelFrame(parent, text="A 生成播客", padding=12)
-        group.pack(fill=tk.X)
+        actions = ttk.Frame(parent, style="App.TFrame")
+        actions.pack(fill=tk.X)
+
+        group = ttk.LabelFrame(actions, text="A 生成播客", padding=14, style="Panel.TLabelframe")
+        group.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
 
         ttk.Label(group, text="浏览器模式").pack(anchor=tk.W)
         ttk.Radiobutton(group, text="可见，方便观察和登录", variable=self.browser_visible_var, value=True).pack(
@@ -291,70 +341,80 @@ class DoubaoFrontend(tk.Tk):
             anchor=tk.W
         )
 
-        ttk.Separator(group).pack(fill=tk.X, pady=18)
+        ttk.Separator(group).pack(fill=tk.X, pady=12)
+
+        a_buttons = ttk.Frame(group, style="Surface.TFrame")
+        a_buttons.pack(fill=tk.X)
 
         self.start_button = ttk.Button(
-            group,
+            a_buttons,
             text="生成播客",
             style="Primary.TButton",
             command=self.start_generate,
         )
-        self.start_button.pack(fill=tk.X, ipady=6)
+        self.start_button.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=6, padx=(0, 8))
 
-        self.stop_button = ttk.Button(group, text="停止当前任务", command=self.stop_current_task)
-        self.stop_button.pack(fill=tk.X, pady=(10, 0))
+        self.stop_button = ttk.Button(a_buttons, text="停止任务", style="Danger.TButton", command=self.stop_current_task)
+        self.stop_button.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=6)
         self.stop_button.configure(state=tk.DISABLED)
 
-        ttk.Button(group, text="清空日志", command=self.clear_log).pack(fill=tk.X, pady=(10, 0))
-
         self.progress = ttk.Progressbar(group, mode="indeterminate")
-        self.progress.pack(fill=tk.X, pady=(18, 6))
+        self.progress.pack(fill=tk.X, pady=(12, 6))
 
         ttk.Label(
             group,
-            text="勾选文件后点击生成播客，会执行原来的模式 A 流程：Markdown 转 PDF、上传豆包、点击生成播客、保存聊天地址。",
+            text="勾选 A 列表里的 Markdown 后运行：转 PDF、上传豆包、生成播客、记录聊天地址。",
             style="Subtle.TLabel",
-            wraplength=230,
-        ).pack(anchor=tk.W, pady=(12, 0))
+            wraplength=420,
+        ).pack(anchor=tk.W, pady=(4, 0))
 
-        bgroup = ttk.LabelFrame(parent, text="B 下载 / 绑定", padding=12)
-        bgroup.pack(fill=tk.BOTH, expand=True, pady=(12, 0))
+        bgroup = ttk.LabelFrame(actions, text="B 下载 / 绑定", padding=14, style="Panel.TLabelframe")
+        bgroup.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 0))
 
-        ttk.Button(bgroup, text="刷新历史链接", command=self.load_b_history).pack(fill=tk.X)
-        ttk.Label(bgroup, text="先在 B 播客状态树里选中链接或播客").pack(anchor=tk.W, pady=(12, 6))
+        b_row1 = ttk.Frame(bgroup, style="Surface.TFrame")
+        b_row1.pack(fill=tk.X)
+        ttk.Button(b_row1, text="刷新历史链接", command=self.load_b_history).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        ttk.Button(b_row1, text="扫描选中链接", command=self.scan_b_link).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
 
-        ttk.Button(bgroup, text="扫描选中链接播客", command=self.scan_b_link).pack(fill=tk.X, pady=2)
-        ttk.Button(bgroup, text="B 下载并绑定选中链接", style="Primary.TButton", command=self.start_b_full).pack(
-            fill=tk.X, pady=(8, 2), ipady=5
-        )
-        ttk.Button(bgroup, text="只选未绑定/失败播客", command=self.select_failed_podcasts).pack(fill=tk.X, pady=2)
-        ttk.Button(bgroup, text="B 重跑选中项", command=self.start_b_retry).pack(
-            fill=tk.X, pady=(10, 2), ipady=5
-        )
+        b_row2 = ttk.Frame(bgroup, style="Surface.TFrame")
+        b_row2.pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(b_row2, text="B 下载并绑定当前链接", style="Primary.TButton", command=self.start_b_full).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6), ipady=5)
+        ttk.Button(b_row2, text="重跑选中项", command=self.start_b_retry).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0), ipady=5)
+
+        ttk.Button(bgroup, text="只选未绑定/失败播客", command=self.select_failed_podcasts).pack(fill=tk.X, pady=(10, 0))
 
         ttk.Label(
             bgroup,
-            text="B 会从历史 JSON 读取链接和绑定结果。扫描后可看到该链接里的播客名、PDF 和绑定状态；重跑只处理你勾选的项。",
+            text="在 B 清单里展开链接查看播客；可只重跑失败或未绑定项。",
             style="Subtle.TLabel",
-            wraplength=230,
-        ).pack(anchor=tk.W, pady=(12, 0))
+            wraplength=420,
+        ).pack(anchor=tk.W, pady=(8, 0))
 
     def _build_log_panel(self, parent):
-        frame = ttk.LabelFrame(parent, text="运行日志", padding=8)
-        frame.pack(fill=tk.BOTH, expand=False, pady=(10, 0))
-        frame.configure(height=220)
+        frame = ttk.LabelFrame(parent, text="运行日志", padding=10, style="Panel.TLabelframe")
+        frame.pack(fill=tk.BOTH, expand=False, pady=(12, 0))
+        frame.configure(height=190)
         frame.pack_propagate(False)
+        log_header = ttk.Frame(frame, style="Surface.TFrame")
+        log_header.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(log_header, text="实时输出会同步保存到 logs 文件夹", style="Subtle.TLabel").pack(side=tk.LEFT)
+        ttk.Button(log_header, text="清空日志", command=self.clear_log).pack(side=tk.RIGHT)
         self.log_text = tk.Text(
             frame,
-            height=14,
+            height=10,
             wrap=tk.WORD,
             font=("Consolas", 10),
-            bg="#111827",
-            fg="#E5E7EB",
-            insertbackground="#E5E7EB",
+            bg=self.colors["log_bg"],
+            fg=self.colors["log_fg"],
+            insertbackground=self.colors["log_fg"],
             relief=tk.FLAT,
+            padx=12,
+            pady=10,
         )
-        self.log_text.pack(fill=tk.BOTH, expand=True)
+        self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        log_scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=log_scrollbar.set)
+        log_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
     def choose_vault(self):
         path = filedialog.askdirectory(initialdir=self.vault_var.get() or str(Path.home()))
@@ -422,8 +482,16 @@ class DoubaoFrontend(tk.Tk):
                 tk.END,
                 iid=path_text,
                 values=(checked, status, path.name, pipeline._format_file_time(timestamp), str(relative)),
+                tags=(self._status_tag(status),),
             )
         self._update_selected_count()
+
+    def _status_tag(self, status):
+        if status == "已绑定":
+            return "status_bound"
+        if status == "已生成":
+            return "status_generated"
+        return "status_pending"
 
     def _generated_markdown_stems(self):
         generated = set()
