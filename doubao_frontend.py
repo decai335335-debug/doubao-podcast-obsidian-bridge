@@ -9,6 +9,7 @@ doubao_frontend.py
 """
 
 import os
+import asyncio
 import json
 import queue
 import re
@@ -41,6 +42,7 @@ configure_playwright_browsers()
 
 import doubao_pipeline as pipeline
 from bridge_json_log import JSON_LOG_DIR
+from playwright.async_api import async_playwright
 
 
 RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -99,6 +101,8 @@ class DoubaoFrontend(tk.Tk):
         self.current_process = None
         self.stop_requested = False
         self.bound_markdown_index = None
+        self.login_confirm_event = None
+        self.login_confirmed = False
         log_dir = APP_DIR / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         self.log_file = log_dir / f"frontend_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
@@ -126,6 +130,7 @@ class DoubaoFrontend(tk.Tk):
         pipeline.FULL_SCRIPT = RESOURCE_DIR / "doubao_full.py"
         pipeline.STATE_FILE = APP_DIR / "pipeline_state.json"
         pipeline.UPLOAD_PROGRESS_FILE = APP_DIR / "upload_progress.json"
+        pipeline.DOUBAO_STATE_FILE = APP_DIR / "doubao_state.json"
         self._append_log(f"[启动] Helper Python: {HELPER_PYTHON}\n")
         self.load_b_history()
         self.after(100, self._drain_log_queue)
@@ -136,9 +141,11 @@ class DoubaoFrontend(tk.Tk):
         if RESOURCE_DIR == APP_DIR or not packaged_state.exists():
             return
         try:
-            if not app_state.exists() or packaged_state.stat().st_size > app_state.stat().st_size * 0.8:
+            if not app_state.exists():
                 shutil.copy2(packaged_state, app_state)
-                self._append_log(f"[启动] 已同步登录态: {app_state}\n")
+                self._append_log(f"[启动] 已初始化登录态: {app_state}\n")
+            else:
+                self._append_log(f"[启动] 使用现有登录态: {app_state}\n")
         except Exception as exc:
             self._append_log(f"[启动] 同步登录态失败: {exc}\n")
 
@@ -261,6 +268,16 @@ class DoubaoFrontend(tk.Tk):
             fill=tk.X, pady=(4, 6)
         )
         ttk.Button(group, text="从文件选择 Markdown", command=self.pick_markdown_files).pack(fill=tk.X)
+
+        ttk.Separator(group).pack(fill=tk.X, pady=16)
+
+        ttk.Button(group, text="登录/刷新豆包登录态", command=self.start_login_refresh).pack(fill=tk.X, pady=2)
+        ttk.Label(
+            group,
+            text="登录状态保存在 EXE 旁边的 doubao_state.json，A/B 会共同读取。",
+            style="Subtle.TLabel",
+            wraplength=240,
+        ).pack(anchor=tk.W, pady=(6, 0))
 
         ttk.Separator(group).pack(fill=tk.X, pady=16)
 
@@ -440,6 +457,61 @@ class DoubaoFrontend(tk.Tk):
         path = filedialog.askdirectory(initialdir=self.vault_var.get() or str(Path.home()))
         if path:
             self.vault_var.set(path)
+
+    def start_login_refresh(self):
+        if self.worker_thread and self.worker_thread.is_alive():
+            messagebox.showinfo("任务运行中", "当前已有任务在运行。")
+            return
+        state_file = APP_DIR / "doubao_state.json"
+        ok = messagebox.askokcancel(
+            "登录豆包",
+            "程序将打开豆包登录页。\n\n请在浏览器里完成登录，确认已经进入豆包账号后，回到本窗口等待自动保存登录态。",
+        )
+        if not ok:
+            return
+        self.progress.start(10)
+        self.stop_button.configure(state=tk.NORMAL)
+        self.status_var.set("正在刷新豆包登录态")
+        self.notebook.select(2)
+        self._append_log(f"\n[登录] 打开豆包登录页，登录态将保存到: {state_file}\n")
+        self.worker_thread = threading.Thread(target=self._run_login_worker, daemon=True)
+        self.worker_thread.start()
+
+    def _run_login_worker(self):
+        writer = QueueWriter(self.log_queue)
+        ok = False
+        try:
+            with redirect_stdout(writer), redirect_stderr(writer):
+                ok = asyncio.run(self._login_and_save_state())
+        except Exception as exc:
+            self.log_queue.put(("log", f"\n[登录错误] 刷新登录态失败: {exc}\n"))
+        finally:
+            self.log_queue.put(("done", ok))
+
+    async def _login_and_save_state(self):
+        state_file = APP_DIR / "doubao_state.json"
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=False)
+            context_kwargs = {"viewport": {"width": 1280, "height": 900}}
+            if state_file.exists():
+                context_kwargs["storage_state"] = str(state_file)
+                print(f"[登录] 已加载现有登录态: {state_file}")
+            context = await browser.new_context(**context_kwargs)
+            page = await context.new_page()
+            await page.goto("https://www.doubao.com", wait_until="domcontentloaded", timeout=60000)
+            print("[登录] 浏览器已打开。请完成登录，然后回到本程序点击确认。")
+            self.login_confirm_event = threading.Event()
+            self.login_confirmed = False
+            self.log_queue.put(("login_confirm", None))
+            self.login_confirm_event.wait()
+            if not self.login_confirmed:
+                await browser.close()
+                print("[登录] 已取消保存登录态")
+                return False
+            await context.storage_state(path=str(state_file))
+            await browser.close()
+            print(f"[登录] 登录态已保存: {state_file}")
+            return True
 
     def scan_files(self):
         vault = self.vault_var.get().strip()
@@ -1188,6 +1260,13 @@ class DoubaoFrontend(tk.Tk):
                     self._append_log(payload)
                 elif kind == "b_scanned":
                     self._apply_scanned_podcasts(payload["url"], payload["podcasts"])
+                elif kind == "login_confirm":
+                    self.login_confirmed = messagebox.askokcancel(
+                        "保存登录态",
+                        "确认已经登录豆包了吗？\n\n点“确定”保存当前登录状态。",
+                    )
+                    if self.login_confirm_event:
+                        self.login_confirm_event.set()
                 elif kind == "done":
                     self.progress.stop()
                     self.start_button.configure(state=tk.NORMAL)
