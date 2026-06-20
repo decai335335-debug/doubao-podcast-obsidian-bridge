@@ -12,11 +12,13 @@ import os
 import json
 import queue
 import re
+import hashlib
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import tkinter as tk
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
@@ -43,6 +45,7 @@ from bridge_json_log import JSON_LOG_DIR
 
 RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
+B_LINK_BATCH_SIZE = 25
 
 
 def resolve_python_exe():
@@ -84,8 +87,12 @@ class DoubaoFrontend(tk.Tk):
         self.scanned_items = []
         self.selected_paths = set()
         self.b_links = []
-        self.b_podcasts = []
-        self.selected_pdfs = set()
+        self.b_podcasts_by_url = {}
+        self.b_link_items = {}
+        self.b_podcast_items = {}
+        self.loaded_b_links = set()
+        self.selected_podcasts = set()
+        self.b_visible_link_count = B_LINK_BATCH_SIZE
         self.log_queue = queue.Queue()
         self.worker_thread = None
         self.current_process = None
@@ -235,24 +242,25 @@ class DoubaoFrontend(tk.Tk):
 
         btop = ttk.Frame(podcast_tab)
         btop.pack(fill=tk.X)
-        ttk.Label(btop, text="豆包链接播客清单", font=("Microsoft YaHei UI", 12, "bold")).pack(side=tk.LEFT)
+        ttk.Label(btop, text="豆包链接播客清单（按新到旧）", font=("Microsoft YaHei UI", 12, "bold")).pack(side=tk.LEFT)
         ttk.Label(btop, textvariable=self.b_count_var, style="Subtle.TLabel").pack(side=tk.RIGHT)
 
-        podcast_columns = ("checked", "status", "pdf", "title", "duration")
-        self.podcast_tree = ttk.Treeview(podcast_tab, columns=podcast_columns, show="headings", selectmode="browse")
+        podcast_columns = ("checked", "status", "title", "duration")
+        self.podcast_tree = ttk.Treeview(podcast_tab, columns=podcast_columns, show="tree headings", selectmode="browse")
+        self.podcast_tree.heading("#0", text="豆包链接 / PDF")
         self.podcast_tree.heading("checked", text="选择")
         self.podcast_tree.heading("status", text="绑定状态")
-        self.podcast_tree.heading("pdf", text="PDF")
         self.podcast_tree.heading("title", text="播客名")
         self.podcast_tree.heading("duration", text="时长")
+        self.podcast_tree.column("#0", width=420, minwidth=260)
         self.podcast_tree.column("checked", width=58, minwidth=58, anchor=tk.CENTER, stretch=False)
         self.podcast_tree.column("status", width=110, minwidth=90, stretch=False)
-        self.podcast_tree.column("pdf", width=310, minwidth=200)
         self.podcast_tree.column("title", width=330, minwidth=200)
         self.podcast_tree.column("duration", width=80, minwidth=70, stretch=False)
         self.podcast_tree.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
         self.podcast_tree.bind("<Button-1>", self.on_podcast_click)
         self.podcast_tree.bind("<Double-1>", self.on_podcast_double_click)
+        self.podcast_tree.bind("<<TreeviewOpen>>", self.on_podcast_tree_open)
 
         podcast_scrollbar = ttk.Scrollbar(podcast_tab, orient=tk.VERTICAL, command=self.podcast_tree.yview)
         self.podcast_tree.configure(yscrollcommand=podcast_scrollbar.set)
@@ -300,16 +308,13 @@ class DoubaoFrontend(tk.Tk):
         bgroup.pack(fill=tk.BOTH, expand=True, pady=(12, 0))
 
         ttk.Button(bgroup, text="刷新历史链接", command=self.load_b_history).pack(fill=tk.X)
-        ttk.Label(bgroup, text="历史豆包链接").pack(anchor=tk.W, pady=(12, 0))
-        self.b_link_combo = ttk.Combobox(bgroup, textvariable=self.b_link_var, state="readonly")
-        self.b_link_combo.pack(fill=tk.X, pady=(5, 8))
-        self.b_link_combo.bind("<<ComboboxSelected>>", lambda _e: self.load_selected_link_status())
+        ttk.Label(bgroup, text="先在 B 播客状态树里选中链接或播客").pack(anchor=tk.W, pady=(12, 6))
 
-        ttk.Button(bgroup, text="扫描该链接播客", command=self.scan_b_link).pack(fill=tk.X, pady=2)
-        ttk.Button(bgroup, text="B 下载并绑定当前链接", style="Primary.TButton", command=self.start_b_full).pack(
+        ttk.Button(bgroup, text="扫描选中链接播客", command=self.scan_b_link).pack(fill=tk.X, pady=2)
+        ttk.Button(bgroup, text="B 下载并绑定选中链接", style="Primary.TButton", command=self.start_b_full).pack(
             fill=tk.X, pady=(8, 2), ipady=5
         )
-        ttk.Button(bgroup, text="只选未绑定/失败", command=self.select_failed_podcasts).pack(fill=tk.X, pady=2)
+        ttk.Button(bgroup, text="只选未绑定/失败播客", command=self.select_failed_podcasts).pack(fill=tk.X, pady=2)
         ttk.Button(bgroup, text="B 重跑选中项", command=self.start_b_retry).pack(
             fill=tk.X, pady=(10, 2), ipady=5
         )
@@ -474,35 +479,66 @@ class DoubaoFrontend(tk.Tk):
                 continue
         return logs
 
+    def _hash_id(self, text):
+        return hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()[:16]
+
+    def _link_iid(self, url):
+        return f"link::{self._hash_id(url)}"
+
+    def _podcast_iid(self, url, pdf):
+        return f"pod::{self._hash_id(url + '|' + pdf)}"
+
+    def _selection_key(self, url, pdf):
+        return f"{url}|{pdf}"
+
+    def _selected_link_url(self):
+        item = self.podcast_tree.focus()
+        if not item:
+            return self.b_link_var.get().strip()
+        if item in self.b_link_items:
+            return self.b_link_items[item]
+        if item in self.b_podcast_items:
+            return self.b_podcast_items[item]["url"]
+        return self.b_link_var.get().strip()
+
     def load_b_history(self):
         logs = self._read_json_logs()
-        links = []
-        seen = set()
+        link_meta = {}
+
+        def add_link(url, timestamp=0, source=""):
+            if not pipeline.is_real_doubao_chat_url(url):
+                return
+            item = link_meta.setdefault(url, {"url": url, "timestamp": 0, "sources": set()})
+            item["timestamp"] = max(item["timestamp"], timestamp or 0)
+            if source:
+                item["sources"].add(source)
+
         state_url = pipeline.load_state().get("chat_url", "")
         if pipeline.is_real_doubao_chat_url(state_url):
-            links.append(state_url)
-            seen.add(state_url)
+            add_link(state_url, time.time(), "当前状态")
         for data in logs:
             url = data.get("chat_url", "")
-            if pipeline.is_real_doubao_chat_url(url) and url not in seen:
-                links.append(url)
-                seen.add(url)
+            timestamp = 0
+            try:
+                timestamp = datetime.strptime(data.get("created_at", ""), "%Y-%m-%d %H:%M:%S").timestamp()
+            except Exception:
+                try:
+                    timestamp = Path(data.get("_json_path", "")).stat().st_mtime
+                except Exception:
+                    pass
+            add_link(url, timestamp, data.get("task_type", "JSON"))
         record_file = pipeline.RECORD_FILE
         if record_file.exists():
             try:
                 content = record_file.read_text(encoding="utf-8", errors="ignore")
                 for url in re.findall(r"https://www\.doubao\.com/chat/(?!local_)\d+", content):
-                    if url not in seen:
-                        links.append(url)
-                        seen.add(url)
+                    add_link(url, record_file.stat().st_mtime, "Markdown记录")
             except Exception as exc:
                 self._append_log(f"[B] 读取 Markdown 历史记录失败: {exc}\n")
-        self.b_links = links
-        self.b_link_combo["values"] = links
-        if links and not self.b_link_var.get():
-            self.b_link_var.set(links[0])
-            self.load_selected_link_status()
-        self._append_log(f"[B] 已读取历史豆包链接 {len(links)} 个\n")
+        self.b_links = sorted(link_meta.values(), key=lambda item: item["timestamp"], reverse=True)
+        self.b_visible_link_count = B_LINK_BATCH_SIZE
+        self._refresh_podcast_tree_links()
+        self._append_log(f"[B] 已读取历史豆包链接 {len(self.b_links)} 个\n")
 
     def _binding_status_maps(self, url):
         bound = {}
@@ -545,10 +581,43 @@ class DoubaoFrontend(tk.Tk):
             return "缺少音频"
         return self._detect_existing_binding(stem)
 
-    def load_selected_link_status(self):
-        url = self.b_link_var.get().strip()
-        if not url:
-            return
+    def _refresh_podcast_tree_links(self):
+        self.podcast_tree.delete(*self.podcast_tree.get_children())
+        self.b_link_items.clear()
+        self.b_podcast_items.clear()
+        self.loaded_b_links.clear()
+        total_known = 0
+        visible_links = self.b_links[:self.b_visible_link_count]
+        for link in visible_links:
+            url = link["url"]
+            iid = self._link_iid(url)
+            known_count = len(self._load_podcasts_for_url(url))
+            total_known += known_count
+            when = "-"
+            if link.get("timestamp"):
+                when = datetime.fromtimestamp(link["timestamp"]).strftime("%Y-%m-%d %H:%M")
+            sources = " / ".join(sorted(link.get("sources", [])))
+            self.b_link_items[iid] = url
+            self.podcast_tree.insert(
+                "",
+                tk.END,
+                iid=iid,
+                text=f"{when}  {url}",
+                values=("", f"{known_count} 个已知播客", sources, ""),
+                open=False,
+            )
+            self.podcast_tree.insert(iid, tk.END, iid=f"loading::{iid}", text="展开后加载播客...", values=("", "", "", ""))
+        if self.b_visible_link_count < len(self.b_links):
+            self.podcast_tree.insert(
+                "",
+                tk.END,
+                iid="more_links",
+                text=f"加载更多历史链接...（{self.b_visible_link_count}/{len(self.b_links)}）",
+                values=("", "", "", ""),
+            )
+        self.b_count_var.set(f"链接 {len(visible_links)}/{len(self.b_links)} 个，已知播客 {total_known} 个，已选 {len(self.selected_podcasts)} 个")
+
+    def _load_podcasts_for_url(self, url):
         logs = self._read_json_logs()
         podcasts = {}
 
@@ -565,65 +634,134 @@ class DoubaoFrontend(tk.Tk):
                             "duration": "",
                             "source": "A记录",
                         }
+            if data.get("task_type") == "B_DOWNLOAD_BIND":
+                for item in data.get("bound_markdown", []) + data.get("failed_bindings", []):
+                    stem = item.get("stem", "")
+                    if stem:
+                        pdf = f"{stem}.pdf"
+                        podcasts.setdefault(pdf, {"pdf": pdf, "title": "", "duration": "", "source": "B记录"})
 
-        self.b_podcasts = []
-        for pdf, item in podcasts.items():
+        result = []
+        for pdf, item in sorted(podcasts.items()):
             stem = self._stem_from_pdf(pdf)
             status = self._status_for_stem(url, stem)
-            self.b_podcasts.append({
+            result.append({
                 "pdf": pdf,
                 "title": item.get("title", ""),
                 "duration": item.get("duration", ""),
                 "status": status,
             })
-        self.selected_pdfs.clear()
-        self._refresh_podcast_table()
-        self.notebook.select(1)
+        return result
+
+    def _load_link_children(self, url):
+        link_iid = self._link_iid(url)
+        if link_iid in self.loaded_b_links:
+            return
+        for child in self.podcast_tree.get_children(link_iid):
+            self.podcast_tree.delete(child)
+        podcasts = self.b_podcasts_by_url.get(url)
+        if podcasts is None:
+            podcasts = self._load_podcasts_for_url(url)
+            self.b_podcasts_by_url[url] = podcasts
+        for item in podcasts:
+            pdf = item.get("pdf", "")
+            iid = self._podcast_iid(url, pdf)
+            key = self._selection_key(url, pdf)
+            self.b_podcast_items[iid] = {"url": url, **item}
+            self.podcast_tree.insert(
+                link_iid,
+                tk.END,
+                iid=iid,
+                text=pdf,
+                values=(
+                    "☑" if key in self.selected_podcasts else "☐",
+                    item.get("status", "未绑定"),
+                    item.get("title", ""),
+                    item.get("duration", ""),
+                ),
+            )
+        if not podcasts:
+            self.podcast_tree.insert(link_iid, tk.END, iid=f"empty::{link_iid}", text="暂无本地记录。可点击“扫描选中链接播客”。", values=("", "", "", ""))
+        self.loaded_b_links.add(link_iid)
+        self._update_b_count()
+
+    def load_selected_link_status(self):
+        url = self._selected_link_url()
+        if url:
+            self.b_link_var.set(url)
+            self._load_link_children(url)
+            self.notebook.select(1)
 
     def _refresh_podcast_table(self):
-        self.podcast_tree.delete(*self.podcast_tree.get_children())
-        for item in self.b_podcasts:
-            pdf = item.get("pdf", "")
-            checked = "☑" if pdf in self.selected_pdfs else "☐"
-            self.podcast_tree.insert(
-                "",
-                tk.END,
-                iid=pdf,
-                values=(checked, item.get("status", "未绑定"), pdf, item.get("title", ""), item.get("duration", "")),
-            )
-        self.b_count_var.set(f"播客 {len(self.b_podcasts)} 个，已选 {len(self.selected_pdfs)} 个")
+        for iid, item in self.b_podcast_items.items():
+            key = self._selection_key(item["url"], item["pdf"])
+            self.podcast_tree.set(iid, "checked", "☑" if key in self.selected_podcasts else "☐")
+        self._update_b_count()
+
+    def _update_b_count(self):
+        known = sum(len(items) for items in self.b_podcasts_by_url.values())
+        self.b_count_var.set(f"链接 {len(self.b_links)} 个，已加载播客 {known} 个，已选 {len(self.selected_podcasts)} 个")
+
+    def on_podcast_tree_open(self, _event):
+        item = self.podcast_tree.focus()
+        if item in self.b_link_items:
+            url = self.b_link_items[item]
+            self.b_link_var.set(url)
+            self._load_link_children(url)
 
     def on_podcast_click(self, event):
         if self.podcast_tree.identify("region", event.x, event.y) != "cell":
             return
         item = self.podcast_tree.identify_row(event.y)
         if item:
+            if item == "more_links":
+                self.b_visible_link_count += B_LINK_BATCH_SIZE
+                self._refresh_podcast_tree_links()
+                return
+            if item in self.b_link_items:
+                self.b_link_var.set(self.b_link_items[item])
+                return
             self.toggle_podcast(item)
 
     def on_podcast_double_click(self, event):
         item = self.podcast_tree.identify_row(event.y)
-        if item:
+        if item == "more_links":
+            self.b_visible_link_count += B_LINK_BATCH_SIZE
+            self._refresh_podcast_tree_links()
+        elif item in self.b_link_items:
+            url = self.b_link_items[item]
+            self.b_link_var.set(url)
+            self._load_link_children(url)
+            self.podcast_tree.item(item, open=not self.podcast_tree.item(item, "open"))
+        elif item:
             self.toggle_podcast(item)
 
-    def toggle_podcast(self, pdf):
-        if pdf in self.selected_pdfs:
-            self.selected_pdfs.remove(pdf)
+    def toggle_podcast(self, iid):
+        item = self.b_podcast_items.get(iid)
+        if not item:
+            return
+        key = self._selection_key(item["url"], item["pdf"])
+        if key in self.selected_podcasts:
+            self.selected_podcasts.remove(key)
         else:
-            self.selected_pdfs.add(pdf)
+            self.selected_podcasts.add(key)
         self._refresh_podcast_table()
 
     def select_failed_podcasts(self):
-        self.selected_pdfs = {
-            item.get("pdf", "")
-            for item in self.b_podcasts
-            if item.get("status") in {"未绑定", "绑定失败", "缺少音频", "已下载未绑定"}
-        }
+        url = self._selected_link_url()
+        if url:
+            self._load_link_children(url)
+        for iid, item in self.b_podcast_items.items():
+            if url and item["url"] != url:
+                continue
+            if item.get("status") in {"未绑定", "绑定失败", "缺少音频", "已下载未绑定"}:
+                self.selected_podcasts.add(self._selection_key(item["url"], item["pdf"]))
         self._refresh_podcast_table()
 
     def scan_b_link(self):
-        url = self.b_link_var.get().strip()
+        url = self._selected_link_url()
         if not url:
-            messagebox.showwarning("缺少链接", "请先选择或刷新历史豆包链接。")
+            messagebox.showwarning("缺少链接", "请先在 B 播客状态树里选择一个豆包链接。")
             return
         if self.worker_thread and self.worker_thread.is_alive():
             messagebox.showinfo("任务运行中", "当前已有任务在运行。")
@@ -659,8 +797,15 @@ class DoubaoFrontend(tk.Tk):
             self.log_queue.put(("done", ok))
 
     def start_b_retry(self):
-        url = self.b_link_var.get().strip()
-        selected = [pdf for pdf in self.selected_pdfs if pdf]
+        url = self._selected_link_url()
+        selected_urls = {key.split("|", 1)[0] for key in self.selected_podcasts}
+        if len(selected_urls) == 1:
+            url = next(iter(selected_urls))
+        selected = []
+        for key in self.selected_podcasts:
+            item_url, pdf = key.split("|", 1)
+            if item_url == url and pdf:
+                selected.append(pdf)
         if not url:
             messagebox.showwarning("缺少链接", "请先选择豆包链接。")
             return
@@ -679,7 +824,7 @@ class DoubaoFrontend(tk.Tk):
         self.worker_thread.start()
 
     def start_b_full(self):
-        url = self.b_link_var.get().strip()
+        url = self._selected_link_url()
         if not url:
             messagebox.showwarning("缺少链接", "请先选择豆包链接。")
             return
@@ -858,21 +1003,29 @@ class DoubaoFrontend(tk.Tk):
 
     def _apply_scanned_podcasts(self, url, scanned):
         self.b_link_var.set(url)
-        self.b_podcasts = []
+        podcasts = []
         for item in scanned:
             pdf = self._normalize_pdf_name(item.get("pdf", ""))
             stem = self._stem_from_pdf(pdf)
-            self.b_podcasts.append({
+            podcasts.append({
                 "pdf": pdf,
                 "title": item.get("title", ""),
                 "duration": item.get("duration", ""),
                 "status": self._status_for_stem(url, stem),
             })
-        self.selected_pdfs.clear()
-        self._refresh_podcast_table()
+        self.b_podcasts_by_url[url] = podcasts
+        link_iid = self._link_iid(url)
+        if link_iid not in self.b_link_items:
+            self.b_links.insert(0, {"url": url, "timestamp": time.time(), "sources": {"扫描结果"}})
+            self.b_visible_link_count = max(self.b_visible_link_count, 1)
+            self._refresh_podcast_tree_links()
+        self.loaded_b_links.discard(link_iid)
+        self._load_link_children(url)
+        if self.podcast_tree.exists(link_iid):
+            self.podcast_tree.item(link_iid, open=True)
         self.notebook.select(1)
-        self.status_var.set(f"B 扫描完成：{len(self.b_podcasts)} 个播客")
-        self._append_log(f"[B] 扫描完成：{len(self.b_podcasts)} 个播客\n")
+        self.status_var.set(f"B 扫描完成：{len(podcasts)} 个播客")
+        self._append_log(f"[B] 扫描完成：{len(podcasts)} 个播客\n")
 
     def clear_log(self):
         self.log_text.delete("1.0", tk.END)
