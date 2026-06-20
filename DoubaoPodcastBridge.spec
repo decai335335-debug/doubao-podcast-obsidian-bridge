@@ -31,6 +31,10 @@ for name in SCRIPT_FILES + DATA_FILES:
     if path.exists():
         datas.append((str(path), "."))
 
+assets_dir = ROOT / "assets"
+if assets_dir.exists():
+    datas.append((str(assets_dir), "assets"))
+
 
 a = Analysis(
     ["doubao_frontend.py"],
@@ -69,6 +73,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=str(ROOT / "assets" / "doubao_bridge.ico") if (ROOT / "assets" / "doubao_bridge.ico").exists() else None,
 )
 coll = COLLECT(
     exe,

@@ -98,6 +98,7 @@ class DoubaoFrontend(tk.Tk):
         self.worker_thread = None
         self.current_process = None
         self.stop_requested = False
+        self.bound_markdown_index = None
         log_dir = APP_DIR / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         self.log_file = log_dir / f"frontend_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
@@ -111,6 +112,7 @@ class DoubaoFrontend(tk.Tk):
         self.b_count_var = tk.StringVar(value="播客 0 个，已选 0 个")
 
         self._setup_style()
+        self._apply_window_icon()
         self._build_ui()
         os.environ["DOUBAO_BRIDGE_APP_DIR"] = str(APP_DIR)
         self._apply_vault_environment()
@@ -140,6 +142,16 @@ class DoubaoFrontend(tk.Tk):
         except Exception as exc:
             self._append_log(f"[启动] 同步登录态失败: {exc}\n")
 
+    def _apply_window_icon(self):
+        for icon_path in (RESOURCE_DIR / "assets" / "doubao_bridge.ico", APP_DIR / "assets" / "doubao_bridge.ico"):
+            if not icon_path.exists():
+                continue
+            try:
+                self.iconbitmap(str(icon_path))
+                return
+            except Exception:
+                pass
+
     def _audio_dir(self):
         vault = Path(self.vault_var.get().strip()).expanduser()
         return Path(os.environ.get("DOUBAO_AUDIO_DIR", str(vault / "60-附件集中仓" / "音频" / "播客")))
@@ -149,6 +161,13 @@ class DoubaoFrontend(tk.Tk):
         audio_dir = vault / "60-附件集中仓" / "音频" / "播客"
         os.environ["DOUBAO_OBSIDIAN_VAULT"] = str(vault)
         os.environ["DOUBAO_AUDIO_DIR"] = str(audio_dir)
+        self.bound_markdown_index = None
+
+    def _browser_env(self, browser_visible):
+        env = os.environ.copy()
+        env["DOUBAO_BROWSER_VISIBLE"] = "1" if browser_visible else "0"
+        env["DOUBAO_HEADLESS"] = "0" if browser_visible else "1"
+        return env
 
     def _setup_style(self):
         style = ttk.Style(self)
@@ -530,6 +549,20 @@ class DoubaoFrontend(tk.Tk):
         except Exception:
             return False
 
+    def _bound_markdown_file_index(self):
+        if self.bound_markdown_index is not None:
+            return self.bound_markdown_index
+        vault = Path(self.vault_var.get().strip()).expanduser()
+        index = {}
+        try:
+            for md in vault.rglob("*.md"):
+                if self._markdown_has_embedded_podcast(md):
+                    index.setdefault(md.stem, md)
+        except Exception:
+            pass
+        self.bound_markdown_index = index
+        return index
+
     def _markdown_status(self, path, generated_stems=None, bound_stems=None):
         generated_stems = generated_stems if generated_stems is not None else self._generated_markdown_stems()
         bound_stems = bound_stems if bound_stems is not None else self._bound_markdown_stems()
@@ -544,6 +577,9 @@ class DoubaoFrontend(tk.Tk):
         region = self.tree.identify("region", event.x, event.y)
         if region != "cell":
             return
+        column = self.tree.identify_column(event.x)
+        if column != "#1":
+            return
         item = self.tree.identify_row(event.y)
         if not item:
             return
@@ -552,7 +588,8 @@ class DoubaoFrontend(tk.Tk):
     def on_tree_double_click(self, event):
         item = self.tree.identify_row(event.y)
         if item:
-            self.toggle_item(item)
+            self.selected_paths = {item}
+            self._refresh_table()
 
     def toggle_item(self, path_text):
         if path_text in self.selected_paths:
@@ -690,6 +727,12 @@ class DoubaoFrontend(tk.Tk):
         vault = Path(self.vault_var.get().strip()).expanduser()
         audio_dir = self._audio_dir()
         mp3_exists = (audio_dir / f"{stem}.mp3").exists()
+        bound_index = self._bound_markdown_file_index()
+        if stem in bound_index:
+            return "已绑定"
+        for md_stem in bound_index:
+            if stem in md_stem or md_stem in stem:
+                return "已绑定"
         candidates = list(vault.rglob(f"{stem}.md"))
         if not candidates:
             candidates = [p for p in vault.rglob("*.md") if stem in p.stem]
@@ -703,6 +746,9 @@ class DoubaoFrontend(tk.Tk):
         return "已下载未绑定" if mp3_exists else "未绑定"
 
     def _status_for_stem(self, url, stem):
+        detected = self._detect_existing_binding(stem)
+        if detected == "已绑定":
+            return "已绑定"
         bound, failed, missing_audio = self._binding_status_maps(url)
         if stem in bound:
             return "已绑定"
@@ -710,7 +756,7 @@ class DoubaoFrontend(tk.Tk):
             return "绑定失败"
         if stem in missing_audio:
             return "缺少音频"
-        return self._detect_existing_binding(stem)
+        return detected
 
     def _refresh_podcast_tree_links(self):
         self.podcast_tree.delete(*self.podcast_tree.get_children())
@@ -826,7 +872,9 @@ class DoubaoFrontend(tk.Tk):
     def _refresh_podcast_table(self):
         for iid, item in self.b_podcast_items.items():
             key = self._selection_key(item["url"], item["pdf"])
+            item["status"] = self._status_for_stem(item["url"], self._stem_from_pdf(item["pdf"]))
             self.podcast_tree.set(iid, "checked", "☑" if key in self.selected_podcasts else "☐")
+            self.podcast_tree.set(iid, "status", item["status"])
         self._update_b_count()
 
     def _update_b_count(self):
@@ -903,6 +951,7 @@ class DoubaoFrontend(tk.Tk):
         self.status_var.set("正在扫描豆包链接播客...")
         self.notebook.select(2)
         browser_visible = self.browser_visible_var.get()
+        self._append_log(f"[B] 浏览器模式: {'可见' if browser_visible else '隐藏'}\n")
         self.worker_thread = threading.Thread(target=self._run_scan_b_worker, args=(url, browser_visible), daemon=True)
         self.worker_thread.start()
 
@@ -916,7 +965,7 @@ class DoubaoFrontend(tk.Tk):
                 cmd = [HELPER_PYTHON, str(RESOURCE_DIR / "doubao_scanner.py"), url]
                 if not browser_visible:
                     cmd.append("--headless")
-                self.current_process = subprocess.Popen(cmd, text=True, encoding="utf-8", errors="replace")
+                self.current_process = subprocess.Popen(cmd, text=True, encoding="utf-8", errors="replace", env=self._browser_env(browser_visible))
                 result_code = self.current_process.wait()
                 self.current_process = None
                 result = type("Result", (), {"returncode": result_code})()
@@ -957,6 +1006,7 @@ class DoubaoFrontend(tk.Tk):
         self._append_log(f"\n[B] 开始重跑选中项：{len(selected)} 个\n")
         self.notebook.select(2)
         browser_visible = self.browser_visible_var.get()
+        self._append_log(f"[B] 浏览器模式: {'可见' if browser_visible else '隐藏'}\n")
         self.worker_thread = threading.Thread(target=self._run_b_retry_worker, args=(url, selected, browser_visible), daemon=True)
         self.worker_thread.start()
 
@@ -975,6 +1025,7 @@ class DoubaoFrontend(tk.Tk):
         self._append_log(f"\n[B] 开始下载并绑定当前链接：{url}\n")
         self.notebook.select(2)
         browser_visible = self.browser_visible_var.get()
+        self._append_log(f"[B] 浏览器模式: {'可见' if browser_visible else '隐藏'}\n")
         self.worker_thread = threading.Thread(target=self._run_b_full_worker, args=(url, browser_visible), daemon=True)
         self.worker_thread.start()
 
@@ -1001,7 +1052,7 @@ class DoubaoFrontend(tk.Tk):
                         break
                     if not HELPER_PYTHON:
                         raise RuntimeError("找不到可用的 python.exe，请设置 DOUBAO_PYTHON_EXE")
-                    self.current_process = subprocess.Popen(cmd, text=True, encoding="utf-8", errors="replace")
+                    self.current_process = subprocess.Popen(cmd, text=True, encoding="utf-8", errors="replace", env=self._browser_env(browser_visible))
                     result_code = self.current_process.wait()
                     self.current_process = None
                     if result_code != 0:
@@ -1024,7 +1075,7 @@ class DoubaoFrontend(tk.Tk):
                 downloader_cmd = [HELPER_PYTHON, str(script_dir / "doubao_downloader.py"), url, *normalized_pdfs]
                 if not browser_visible:
                     downloader_cmd.append("--headless")
-                self.current_process = subprocess.Popen(downloader_cmd, text=True, encoding="utf-8", errors="replace")
+                self.current_process = subprocess.Popen(downloader_cmd, text=True, encoding="utf-8", errors="replace", env=self._browser_env(browser_visible))
                 result1_code = self.current_process.wait()
                 self.current_process = None
                 if self.stop_requested:
@@ -1043,7 +1094,7 @@ class DoubaoFrontend(tk.Tk):
                         targets_file,
                         "--bind-existing",
                     ]
-                    self.current_process = subprocess.Popen(post_cmd, text=True, encoding="utf-8", errors="replace")
+                    self.current_process = subprocess.Popen(post_cmd, text=True, encoding="utf-8", errors="replace", env=self._browser_env(browser_visible))
                     result2_code = self.current_process.wait()
                     self.current_process = None
                     result2 = type("Result", (), {"returncode": result2_code})()
@@ -1066,9 +1117,20 @@ class DoubaoFrontend(tk.Tk):
         if not selected:
             messagebox.showwarning("未选择文件", "请先勾选要生成播客的 Markdown 文件。")
             return
+        if len(selected) > 1:
+            preview = "\n".join(f"• {Path(path).name}" for path in selected[:8])
+            if len(selected) > 8:
+                preview += f"\n……另有 {len(selected) - 8} 个"
+            ok = messagebox.askyesno(
+                "确认批量生成",
+                f"当前勾选了 {len(selected)} 个 Markdown，将全部生成播客：\n\n{preview}\n\n确定继续吗？",
+            )
+            if not ok:
+                return
 
         self._apply_vault_to_pipeline()
         browser_visible = self.browser_visible_var.get()
+        self._append_log(f"[A] 浏览器模式: {'可见' if browser_visible else '隐藏'}\n")
         self.start_button.configure(state=tk.DISABLED)
         self.stop_requested = False
         pipeline.clear_stop_request()
