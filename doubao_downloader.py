@@ -58,7 +58,7 @@ else:
 
 DOWNLOADS_DIR = Path.home() / "Downloads"
 OBSIDIAN_VAULT = Path(os.environ.get("DOUBAO_OBSIDIAN_VAULT", r"E:\Obsidian\主仓库"))
-AUDIO_DIR = OBSIDIAN_VAULT / "附件" / "音频"
+AUDIO_DIR = Path(os.environ.get("DOUBAO_AUDIO_DIR", str(OBSIDIAN_VAULT / "60-附件集中仓" / "音频" / "播客")))
 STATE_FILE = APP_DIR / "doubao_state.json"
 LOGIN_WAIT_SECONDS = 8
 DOWNLOAD_TIMEOUT = 180

@@ -24,7 +24,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='repla
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 VAULT = Path(os.environ.get("DOUBAO_OBSIDIAN_VAULT", r"E:\Obsidian\主仓库"))
-AUDIO_DIR = VAULT / "附件" / "音频"
+AUDIO_DIR = Path(os.environ.get("DOUBAO_AUDIO_DIR", str(VAULT / "60-附件集中仓" / "音频" / "播客")))
 APP_DIR = Path(os.environ.get("DOUBAO_BRIDGE_APP_DIR", Path(__file__).parent))
 
 # 记录文件（与 pipeline 共用同一个）
@@ -110,6 +110,19 @@ def wav_to_mp3(wav_path: Path) -> Path:
     
     print(f"[完成] {mp3_path.name}")
     return mp3_path
+
+
+def delete_wav_if_bound(wav_path: Path, bind_result: dict):
+    """绑定成功后删除对应 WAV，保留压缩后的 MP3。"""
+    if not bind_result or not bind_result.get("bound"):
+        return
+    if not wav_path.exists():
+        return
+    try:
+        wav_path.unlink()
+        print(f"[删除] 已删除原 WAV: {wav_path.name}")
+    except Exception as e:
+        print(f"[警告] 删除 WAV 失败: {wav_path.name} - {e}")
 
 
 def _load_md_mapping():
@@ -295,12 +308,14 @@ def main():
                     bind_results.append(bind_result)
                     if bind_result.get("bound"):
                         bound_stems.append(stem)
+                        delete_wav_if_bound(wav, bind_result)
                 print()
             elif mp3.exists():
                 bind_result = process_mp3(mp3, chat_url)
                 bind_results.append(bind_result)
                 if bind_result.get("bound"):
                     bound_stems.append(stem)
+                    delete_wav_if_bound(wav, bind_result)
                 print()
             else:
                 print(f"[跳过] 找不到音频: {stem}.wav/.mp3\n")
@@ -322,6 +337,7 @@ def main():
                     bind_results.append(bind_result)
                     if bind_result.get("bound"):
                         bound_stems.append(mp3.stem)
+                        delete_wav_if_bound(wav, bind_result)
                 print()
         
         # 处理已有 MP3（仅当 --bind-existing 时）

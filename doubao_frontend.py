@@ -112,6 +112,7 @@ class DoubaoFrontend(tk.Tk):
         self._setup_style()
         self._build_ui()
         os.environ["DOUBAO_BRIDGE_APP_DIR"] = str(APP_DIR)
+        self._apply_vault_environment()
         self._ensure_packaged_login_state()
         pipeline.PYTHON_EXE = HELPER_PYTHON
         pipeline.SCRIPT_DIR = APP_DIR
@@ -137,6 +138,16 @@ class DoubaoFrontend(tk.Tk):
                 self._append_log(f"[启动] 已同步登录态: {app_state}\n")
         except Exception as exc:
             self._append_log(f"[启动] 同步登录态失败: {exc}\n")
+
+    def _audio_dir(self):
+        vault = Path(self.vault_var.get().strip()).expanduser()
+        return Path(os.environ.get("DOUBAO_AUDIO_DIR", str(vault / "60-附件集中仓" / "音频" / "播客")))
+
+    def _apply_vault_environment(self):
+        vault = Path(self.vault_var.get().strip()).expanduser()
+        audio_dir = vault / "60-附件集中仓" / "音频" / "播客"
+        os.environ["DOUBAO_OBSIDIAN_VAULT"] = str(vault)
+        os.environ["DOUBAO_AUDIO_DIR"] = str(audio_dir)
 
     def _setup_style(self):
         style = ttk.Style(self)
@@ -222,14 +233,16 @@ class DoubaoFrontend(tk.Tk):
         ttk.Label(top, text="Markdown 文件列表", font=("Microsoft YaHei UI", 12, "bold")).pack(side=tk.LEFT)
         ttk.Label(top, textvariable=self.selected_count_var, style="Subtle.TLabel").pack(side=tk.RIGHT)
 
-        columns = ("checked", "name", "modified", "path")
+        columns = ("checked", "status", "name", "modified", "path")
         self.tree = ttk.Treeview(markdown_tab, columns=columns, show="headings", selectmode="browse")
         self.tree.heading("checked", text="选择")
+        self.tree.heading("status", text="状态")
         self.tree.heading("name", text="文件名")
         self.tree.heading("modified", text="时间")
         self.tree.heading("path", text="相对路径")
         self.tree.column("checked", width=58, minwidth=58, anchor=tk.CENTER, stretch=False)
-        self.tree.column("name", width=260, minwidth=160)
+        self.tree.column("status", width=90, minwidth=80, anchor=tk.CENTER, stretch=False)
+        self.tree.column("name", width=250, minwidth=160)
         self.tree.column("modified", width=140, minwidth=120, stretch=False)
         self.tree.column("path", width=430, minwidth=240)
         self.tree.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
@@ -394,9 +407,12 @@ class DoubaoFrontend(tk.Tk):
     def _refresh_table(self):
         self.tree.delete(*self.tree.get_children())
         root = Path(self.vault_var.get().strip()).expanduser()
+        generated_stems = self._generated_markdown_stems()
+        bound_stems = self._bound_markdown_stems()
         for timestamp, path in self.scanned_items:
             path_text = str(path)
             checked = "☑" if path_text in self.selected_paths else "☐"
+            status = self._markdown_status(path, generated_stems, bound_stems)
             try:
                 relative = path.relative_to(root)
             except ValueError:
@@ -405,9 +421,55 @@ class DoubaoFrontend(tk.Tk):
                 "",
                 tk.END,
                 iid=path_text,
-                values=(checked, path.name, pipeline._format_file_time(timestamp), str(relative)),
+                values=(checked, status, path.name, pipeline._format_file_time(timestamp), str(relative)),
             )
         self._update_selected_count()
+
+    def _generated_markdown_stems(self):
+        generated = set()
+        for data in self._read_json_logs():
+            if data.get("task_type") != "A_GENERATE_PODCAST":
+                continue
+            for item in data.get("pdf_files", []):
+                if item.get("uploaded"):
+                    md_path = item.get("markdown_path", "")
+                    if md_path:
+                        generated.add(Path(md_path).stem)
+                    else:
+                        generated.add(Path(item.get("name", "")).stem)
+        return generated
+
+    def _bound_markdown_stems(self):
+        bound = set()
+        for data in self._read_json_logs():
+            if data.get("task_type") == "B_DOWNLOAD_BIND":
+                for item in data.get("bound_markdown", []):
+                    if item.get("stem"):
+                        bound.add(item["stem"])
+        return bound
+
+    def _markdown_has_embedded_podcast(self, path):
+        try:
+            text = Path(path).read_text(encoding="utf-8", errors="ignore")
+            return (
+                "配套播客" in text
+                or "[[附件/音频/" in text
+                or "附件/音频" in text
+                or "60-附件集中仓/音频/播客" in text
+                or "60-附件集中仓\\音频\\播客" in text
+            )
+        except Exception:
+            return False
+
+    def _markdown_status(self, path, generated_stems=None, bound_stems=None):
+        generated_stems = generated_stems if generated_stems is not None else self._generated_markdown_stems()
+        bound_stems = bound_stems if bound_stems is not None else self._bound_markdown_stems()
+        stem = Path(path).stem
+        if stem in bound_stems or self._markdown_has_embedded_podcast(path):
+            return "已绑定"
+        if stem in generated_stems:
+            return "已生成"
+        return "未生成"
 
     def on_tree_click(self, event):
         region = self.tree.identify("region", event.x, event.y)
@@ -557,7 +619,7 @@ class DoubaoFrontend(tk.Tk):
 
     def _detect_existing_binding(self, stem):
         vault = Path(self.vault_var.get().strip()).expanduser()
-        audio_dir = vault / "附件" / "音频"
+        audio_dir = self._audio_dir()
         mp3_exists = (audio_dir / f"{stem}.mp3").exists()
         candidates = list(vault.rglob(f"{stem}.md"))
         if not candidates:
@@ -965,6 +1027,7 @@ class DoubaoFrontend(tk.Tk):
 
     def _apply_vault_to_pipeline(self):
         vault = Path(self.vault_var.get().strip()).expanduser()
+        self._apply_vault_environment()
         os.environ["DOUBAO_OBSIDIAN_VAULT"] = str(vault)
         pipeline.OBSIDIAN_VAULT = vault
         pipeline.RECORD_FILE = vault / "总报告" / "豆包播客代码上传与下载绑定记录.md"
