@@ -109,6 +109,7 @@ class DoubaoFrontend(tk.Tk):
 
         self.vault_var = tk.StringVar(value=str(pipeline.OBSIDIAN_VAULT))
         self.limit_var = tk.StringVar(value="80")
+        self.since_time_var = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d 00:00"))
         self.browser_visible_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="就绪")
         self.selected_count_var = tk.StringVar(value="已选 0 个")
@@ -133,6 +134,7 @@ class DoubaoFrontend(tk.Tk):
         pipeline.DOUBAO_STATE_FILE = APP_DIR / "doubao_state.json"
         self._append_log(f"[启动] Helper Python: {HELPER_PYTHON}\n")
         self.load_b_history()
+        self.after(300, self.scan_files)
         self.after(100, self._drain_log_queue)
 
     def _ensure_packaged_login_state(self):
@@ -281,10 +283,11 @@ class DoubaoFrontend(tk.Tk):
 
         ttk.Separator(group).pack(fill=tk.X, pady=16)
 
-        ttk.Button(group, text="全选", command=self.select_all).pack(fill=tk.X, pady=2)
-        ttk.Button(group, text="反选", command=self.invert_selection).pack(fill=tk.X, pady=2)
         ttk.Button(group, text="只选今天新增/修改", command=self.select_today).pack(fill=tk.X, pady=2)
-        ttk.Button(group, text="清空选择", command=self.clear_selection).pack(fill=tk.X, pady=2)
+
+        ttk.Label(group, text="选择此时间之后新增/修改").pack(anchor=tk.W, pady=(12, 0))
+        ttk.Entry(group, textvariable=self.since_time_var).pack(fill=tk.X, pady=(5, 6))
+        ttk.Button(group, text="选择此时间之后", command=self.select_since_time).pack(fill=tk.X, pady=2)
 
         ttk.Separator(group).pack(fill=tk.X, pady=16)
         ttk.Label(
@@ -362,6 +365,10 @@ class DoubaoFrontend(tk.Tk):
         podcast_scrollbar = ttk.Scrollbar(podcast_tab, orient=tk.VERTICAL, command=self.podcast_tree.yview)
         self.podcast_tree.configure(yscrollcommand=podcast_scrollbar.set)
         podcast_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.podcast_tree.tag_configure("status_bound", foreground="#2F6B5F")
+        self.podcast_tree.tag_configure("status_generated", foreground="#B56A2A")
+        self.podcast_tree.tag_configure("status_failed", foreground="#B42318")
+        self.podcast_tree.tag_configure("status_pending", foreground="#667085")
 
         self._build_log_panel(log_tab)
 
@@ -583,6 +590,8 @@ class DoubaoFrontend(tk.Tk):
             return "status_bound"
         if status == "已生成":
             return "status_generated"
+        if status in {"绑定失败", "缺少音频"}:
+            return "status_failed"
         return "status_pending"
 
     def _generated_markdown_stems(self):
@@ -688,6 +697,23 @@ class DoubaoFrontend(tk.Tk):
         self.selected_paths = selected
         self._refresh_table()
 
+    def select_since_time(self):
+        text = self.since_time_var.get().strip()
+        formats = ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y-%m-%d")
+        since = None
+        for fmt in formats:
+            try:
+                since = datetime.strptime(text, fmt)
+                break
+            except ValueError:
+                pass
+        if since is None:
+            messagebox.showwarning("时间格式不正确", "请使用类似 2026-06-20 14:30 的格式。")
+            return
+        cutoff = since.timestamp()
+        self.selected_paths = {str(path) for timestamp, path in self.scanned_items if timestamp >= cutoff}
+        self._refresh_table()
+
     def clear_selection(self):
         self.selected_paths.clear()
         self._refresh_table()
@@ -745,17 +771,26 @@ class DoubaoFrontend(tk.Tk):
         logs = self._read_json_logs()
         link_meta = {}
 
-        def add_link(url, timestamp=0, source=""):
+        def add_link(url, timestamp=0, source="", update_time=True):
             if not pipeline.is_real_doubao_chat_url(url):
                 return
             item = link_meta.setdefault(url, {"url": url, "timestamp": 0, "sources": set()})
-            item["timestamp"] = max(item["timestamp"], timestamp or 0)
+            if update_time and timestamp:
+                if not item["timestamp"] or timestamp < item["timestamp"]:
+                    item["timestamp"] = timestamp
             if source:
                 item["sources"].add(source)
 
         state_url = pipeline.load_state().get("chat_url", "")
         if pipeline.is_real_doubao_chat_url(state_url):
-            add_link(state_url, time.time(), "当前状态")
+            state_time = 0
+            try:
+                last_run = pipeline.load_state().get("last_run", "")
+                if last_run:
+                    state_time = datetime.strptime(last_run, "%Y-%m-%d %H:%M:%S").timestamp()
+            except Exception:
+                pass
+            add_link(state_url, state_time, "当前状态")
         for data in logs:
             url = data.get("chat_url", "")
             timestamp = 0
@@ -772,7 +807,7 @@ class DoubaoFrontend(tk.Tk):
             try:
                 content = record_file.read_text(encoding="utf-8", errors="ignore")
                 for url in re.findall(r"https://www\.doubao\.com/chat/(?!local_)\d+", content):
-                    add_link(url, record_file.stat().st_mtime, "Markdown记录")
+                    add_link(url, 0, "Markdown记录", update_time=False)
             except Exception as exc:
                 self._append_log(f"[B] 读取 Markdown 历史记录失败: {exc}\n")
         self.b_links = sorted(link_meta.values(), key=lambda item: item["timestamp"], reverse=True)
@@ -928,6 +963,7 @@ class DoubaoFrontend(tk.Tk):
                     item.get("title", ""),
                     item.get("duration", ""),
                 ),
+                tags=(self._status_tag(item.get("status", "未绑定")),),
             )
         if not podcasts:
             self.podcast_tree.insert(link_iid, tk.END, iid=f"empty::{link_iid}", text="暂无本地记录。可点击“扫描选中链接播客”。", values=("", "", "", ""))
@@ -947,6 +983,7 @@ class DoubaoFrontend(tk.Tk):
             item["status"] = self._status_for_stem(item["url"], self._stem_from_pdf(item["pdf"]))
             self.podcast_tree.set(iid, "checked", "☑" if key in self.selected_podcasts else "☐")
             self.podcast_tree.set(iid, "status", item["status"])
+            self.podcast_tree.item(iid, tags=(self._status_tag(item["status"]),))
         self._update_b_count()
 
     def _update_b_count(self):
@@ -970,7 +1007,10 @@ class DoubaoFrontend(tk.Tk):
                 self._refresh_podcast_tree_links()
                 return
             if item in self.b_link_items:
-                self.b_link_var.set(self.b_link_items[item])
+                url = self.b_link_items[item]
+                self.b_link_var.set(url)
+                self._load_link_children(url)
+                self.podcast_tree.item(item, open=not self.podcast_tree.item(item, "open"))
                 return
             self.toggle_podcast(item)
 
@@ -1275,6 +1315,7 @@ class DoubaoFrontend(tk.Tk):
                     pipeline.clear_stop_request()
                     self.status_var.set("任务完成" if payload else "任务结束：存在失败或中断")
                     self._append_log("\n[任务] 流程结束\n")
+                    self.after(300, self.scan_files)
         except queue.Empty:
             pass
         self.after(100, self._drain_log_queue)
