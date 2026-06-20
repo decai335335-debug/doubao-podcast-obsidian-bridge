@@ -222,7 +222,6 @@ class DoubaoFrontend(tk.Tk):
         self._build_left_panel(left)
         self._build_action_panel(middle)
         self._build_file_table(middle)
-        self._build_log_panel(middle)
 
     def _build_left_panel(self, parent):
         group = ttk.LabelFrame(parent, text="仓库与筛选", padding=14, style="Panel.TLabelframe")
@@ -269,8 +268,10 @@ class DoubaoFrontend(tk.Tk):
 
         markdown_tab = ttk.Frame(self.notebook, padding=(12, 12, 12, 10), style="Surface.TFrame")
         podcast_tab = ttk.Frame(self.notebook, padding=(12, 12, 12, 10), style="Surface.TFrame")
+        log_tab = ttk.Frame(self.notebook, padding=(12, 12, 12, 10), style="Surface.TFrame")
         self.notebook.add(markdown_tab, text="A Markdown")
         self.notebook.add(podcast_tab, text="B 播客状态")
+        self.notebook.add(log_tab, text="C 运行日志")
 
         top = ttk.Frame(markdown_tab, style="Surface.TFrame")
         top.pack(fill=tk.X)
@@ -325,6 +326,8 @@ class DoubaoFrontend(tk.Tk):
         podcast_scrollbar = ttk.Scrollbar(podcast_tab, orient=tk.VERTICAL, command=self.podcast_tree.yview)
         self.podcast_tree.configure(yscrollcommand=podcast_scrollbar.set)
         podcast_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self._build_log_panel(log_tab)
 
     def _build_action_panel(self, parent):
         actions = ttk.Frame(parent, style="App.TFrame")
@@ -392,16 +395,14 @@ class DoubaoFrontend(tk.Tk):
 
     def _build_log_panel(self, parent):
         frame = ttk.LabelFrame(parent, text="运行日志", padding=10, style="Panel.TLabelframe")
-        frame.pack(fill=tk.BOTH, expand=False, pady=(12, 0))
-        frame.configure(height=190)
-        frame.pack_propagate(False)
+        frame.pack(fill=tk.BOTH, expand=True)
         log_header = ttk.Frame(frame, style="Surface.TFrame")
         log_header.pack(fill=tk.X, pady=(0, 8))
         ttk.Label(log_header, text="实时输出会同步保存到 logs 文件夹", style="Subtle.TLabel").pack(side=tk.LEFT)
         ttk.Button(log_header, text="清空日志", command=self.clear_log).pack(side=tk.RIGHT)
         self.log_text = tk.Text(
             frame,
-            height=10,
+            height=18,
             wrap=tk.WORD,
             font=("Consolas", 10),
             bg=self.colors["log_bg"],
@@ -900,10 +901,12 @@ class DoubaoFrontend(tk.Tk):
         self.stop_requested = False
         self.stop_button.configure(state=tk.NORMAL)
         self.status_var.set("正在扫描豆包链接播客...")
-        self.worker_thread = threading.Thread(target=self._run_scan_b_worker, args=(url,), daemon=True)
+        self.notebook.select(2)
+        browser_visible = self.browser_visible_var.get()
+        self.worker_thread = threading.Thread(target=self._run_scan_b_worker, args=(url, browser_visible), daemon=True)
         self.worker_thread.start()
 
-    def _run_scan_b_worker(self, url):
+    def _run_scan_b_worker(self, url, browser_visible):
         writer = QueueWriter(self.log_queue)
         ok = False
         try:
@@ -911,6 +914,8 @@ class DoubaoFrontend(tk.Tk):
                 if not HELPER_PYTHON:
                     raise RuntimeError("找不到可用的 python.exe，请设置 DOUBAO_PYTHON_EXE")
                 cmd = [HELPER_PYTHON, str(RESOURCE_DIR / "doubao_scanner.py"), url]
+                if not browser_visible:
+                    cmd.append("--headless")
                 self.current_process = subprocess.Popen(cmd, text=True, encoding="utf-8", errors="replace")
                 result_code = self.current_process.wait()
                 self.current_process = None
@@ -950,7 +955,9 @@ class DoubaoFrontend(tk.Tk):
         self.stop_button.configure(state=tk.NORMAL)
         self.status_var.set(f"B 重跑中：{len(selected)} 个播客")
         self._append_log(f"\n[B] 开始重跑选中项：{len(selected)} 个\n")
-        self.worker_thread = threading.Thread(target=self._run_b_retry_worker, args=(url, selected), daemon=True)
+        self.notebook.select(2)
+        browser_visible = self.browser_visible_var.get()
+        self.worker_thread = threading.Thread(target=self._run_b_retry_worker, args=(url, selected, browser_visible), daemon=True)
         self.worker_thread.start()
 
     def start_b_full(self):
@@ -966,19 +973,26 @@ class DoubaoFrontend(tk.Tk):
         self.stop_button.configure(state=tk.NORMAL)
         self.status_var.set("B 全流程运行中")
         self._append_log(f"\n[B] 开始下载并绑定当前链接：{url}\n")
-        self.worker_thread = threading.Thread(target=self._run_b_full_worker, args=(url,), daemon=True)
+        self.notebook.select(2)
+        browser_visible = self.browser_visible_var.get()
+        self.worker_thread = threading.Thread(target=self._run_b_full_worker, args=(url, browser_visible), daemon=True)
         self.worker_thread.start()
 
-    def _run_b_full_worker(self, url):
+    def _run_b_full_worker(self, url, browser_visible):
         writer = QueueWriter(self.log_queue)
         ok = False
         try:
             with redirect_stdout(writer), redirect_stderr(writer):
                 script_dir = RESOURCE_DIR
+                scanner_cmd = [HELPER_PYTHON, str(script_dir / "doubao_scanner.py"), url]
+                downloader_cmd = [HELPER_PYTHON, str(script_dir / "doubao_downloader.py"), url, "--all"]
+                if not browser_visible:
+                    scanner_cmd.append("--headless")
+                    downloader_cmd.append("--headless")
                 steps = [
-                    [HELPER_PYTHON, str(script_dir / "doubao_scanner.py"), url],
-                    [HELPER_PYTHON, str(script_dir / "doubao_downloader.py"), url, "--all"],
-                    [HELPER_PYTHON, str(script_dir / "post_process.py"), "--bind-existing"],
+                    scanner_cmd,
+                    downloader_cmd,
+                    [HELPER_PYTHON, str(script_dir / "post_process.py"), "--bind-existing", "--all-wav"],
                 ]
                 ok = True
                 for cmd in steps:
@@ -997,7 +1011,7 @@ class DoubaoFrontend(tk.Tk):
         finally:
             self.log_queue.put(("done", ok))
 
-    def _run_b_retry_worker(self, url, selected_pdfs):
+    def _run_b_retry_worker(self, url, selected_pdfs, browser_visible):
         writer = QueueWriter(self.log_queue)
         ok = False
         try:
@@ -1008,6 +1022,8 @@ class DoubaoFrontend(tk.Tk):
                 stems = [Path(pdf).stem for pdf in normalized_pdfs]
                 script_dir = RESOURCE_DIR
                 downloader_cmd = [HELPER_PYTHON, str(script_dir / "doubao_downloader.py"), url, *normalized_pdfs]
+                if not browser_visible:
+                    downloader_cmd.append("--headless")
                 self.current_process = subprocess.Popen(downloader_cmd, text=True, encoding="utf-8", errors="replace")
                 result1_code = self.current_process.wait()
                 self.current_process = None
@@ -1060,6 +1076,7 @@ class DoubaoFrontend(tk.Tk):
         self.progress.start(10)
         self.status_var.set(f"生成中：{len(selected)} 个 Markdown")
         self._append_log(f"\n[任务] 开始生成播客，文件数：{len(selected)}\n")
+        self.notebook.select(2)
 
         self.worker_thread = threading.Thread(
             target=self._run_generate_worker,

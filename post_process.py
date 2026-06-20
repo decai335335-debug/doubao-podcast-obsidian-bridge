@@ -289,7 +289,7 @@ def main():
     if args.targets_file:
         try:
             with open(args.targets_file, "r", encoding="utf-8") as f:
-                target_stems = [line.strip() for line in f if line.strip()]
+                target_stems = [line.strip().lstrip("\ufeff") for line in f if line.strip().lstrip("\ufeff")]
             print(f"[信息] 从 targets-file 读取到 {len(target_stems)} 个待绑定文件\n")
         except Exception as e:
             print(f"[警告] 读取 targets-file 失败: {e}\n")

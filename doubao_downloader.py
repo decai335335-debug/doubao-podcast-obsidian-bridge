@@ -62,6 +62,7 @@ AUDIO_DIR = Path(os.environ.get("DOUBAO_AUDIO_DIR", str(OBSIDIAN_VAULT / "60-附
 STATE_FILE = APP_DIR / "doubao_state.json"
 LOGIN_WAIT_SECONDS = 8
 DOWNLOAD_TIMEOUT = 180
+BROWSER_VISIBLE = "--headless" not in sys.argv
 
 
 def sanitize(name: str) -> str:
@@ -203,7 +204,7 @@ async def main():
     async with async_playwright() as p:
         print("[启动] 正在启动浏览器...")
         browser = await p.chromium.launch(
-            headless=False,
+            headless=not BROWSER_VISIBLE,
             args=["--disable-blink-features=AutomationControlled"]
         )
         

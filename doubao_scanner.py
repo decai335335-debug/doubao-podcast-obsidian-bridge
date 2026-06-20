@@ -34,6 +34,7 @@ CHAT_URL = sys.argv[1] if len(sys.argv) > 1 else "https://www.doubao.com/chat/38
 APP_DIR = Path(os.environ.get("DOUBAO_BRIDGE_APP_DIR", Path(__file__).parent))
 STATE_FILE = APP_DIR / "doubao_state.json"
 LOGIN_WAIT_SECONDS = 8
+BROWSER_VISIBLE = "--headless" not in sys.argv
 
 
 async def scroll_up_and_collect(page):
@@ -144,7 +145,7 @@ async def main():
     async with async_playwright() as p:
         print("[启动] 正在启动浏览器...")
         browser = await p.chromium.launch(
-            headless=False,
+            headless=not BROWSER_VISIBLE,
             args=["--disable-blink-features=AutomationControlled"]
         )
         
