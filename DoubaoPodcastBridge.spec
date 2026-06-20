@@ -15,6 +15,7 @@ SCRIPT_FILES = [
     "md2pdf.py",
     "post_process.py",
     "scan_to_clipboard.py",
+    "video_sub_runner.py",
 ]
 DATA_FILES = [
     "chat_url.txt",

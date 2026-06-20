@@ -323,26 +323,73 @@ class DoubaoFrontend(tk.Tk):
         frame, content = self._build_tool_shell(
             parent,
             "Video Sub MD",
-            "启动原项目的 Web 界面，处理视频字幕下载、分析和 Markdown 输出。",
+            "批量下载 Bilibili / YouTube / Coursera 字幕，Douyin 可转写，输出 Markdown 并可选 AI 分析/翻译。",
         )
-        group = ttk.LabelFrame(content, text="启动 Web 工具", padding=16, style="Panel.TLabelframe")
-        group.pack(fill=tk.X)
-        self.video_sub_port_var = tk.StringVar(value="7860")
-        ttk.Label(group, text="服务端口").pack(anchor=tk.W)
-        ttk.Entry(group, textvariable=self.video_sub_port_var, width=12).pack(anchor=tk.W, pady=(5, 10))
-        row = ttk.Frame(group, style="Surface.TFrame")
-        row.pack(fill=tk.X)
-        ttk.Button(row, text="启动 Video Sub Web", style="Primary.TButton", command=self.start_video_sub_web).pack(
-            side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8), ipady=5
+        main = ttk.Frame(content, style="App.TFrame")
+        main.pack(fill=tk.BOTH, expand=True)
+
+        left = ttk.Frame(main, style="App.TFrame")
+        right = ttk.Frame(main, style="App.TFrame")
+        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
+        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 0))
+
+        input_group = ttk.LabelFrame(left, text="视频链接", padding=16, style="Panel.TLabelframe")
+        input_group.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(input_group, text="支持 Bilibili / YouTube / Coursera / Douyin，空格、逗号、换行都可以。").pack(anchor=tk.W)
+        self.video_sub_links_text = tk.Text(input_group, height=12, wrap=tk.WORD, font=("Consolas", 10))
+        self.video_sub_links_text.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
+
+        settings = ttk.LabelFrame(right, text="下载与账号", padding=16, style="Panel.TLabelframe")
+        settings.pack(fill=tk.X)
+        self.video_sub_sessdata_var = tk.StringVar(value="")
+        self.video_sub_lang_var = tk.StringVar(value="")
+        self.video_sub_concurrent_var = tk.StringVar(value="5")
+        self.video_sub_ai_mode_var = tk.StringVar(value="default")
+        self.video_sub_analysis_var = tk.BooleanVar(value=False)
+        self.video_sub_translate_var = tk.BooleanVar(value=False)
+        self.video_sub_playlist_var = tk.StringVar(value="current")
+        self.video_sub_asr_var = tk.BooleanVar(value=False)
+
+        ttk.Label(settings, text="Bilibili SESSDATA（可留空使用 config.py）").pack(anchor=tk.W)
+        ttk.Entry(settings, textvariable=self.video_sub_sessdata_var, show="*").pack(fill=tk.X, pady=(5, 10))
+
+        grid = ttk.Frame(settings, style="Surface.TFrame")
+        grid.pack(fill=tk.X)
+        ttk.Label(grid, text="字幕语言").grid(row=0, column=0, sticky=tk.W)
+        ttk.Entry(grid, textvariable=self.video_sub_lang_var, width=12).grid(row=1, column=0, sticky=tk.W, pady=(5, 0))
+        ttk.Label(grid, text="并发数").grid(row=0, column=1, sticky=tk.W, padx=(16, 0))
+        ttk.Spinbox(grid, from_=1, to=12, textvariable=self.video_sub_concurrent_var, width=8).grid(
+            row=1, column=1, sticky=tk.W, padx=(16, 0), pady=(5, 0)
         )
-        ttk.Button(row, text="打开浏览器页面", command=self.open_video_sub_web).pack(
-            side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0), ipady=5
+
+        ai_group = ttk.LabelFrame(right, text="AI 后处理", padding=16, style="Panel.TLabelframe")
+        ai_group.pack(fill=tk.X, pady=(12, 0))
+        ttk.Radiobutton(ai_group, text="使用 config.py 默认模式", variable=self.video_sub_ai_mode_var, value="default").pack(anchor=tk.W)
+        ttk.Radiobutton(ai_group, text="本地模型", variable=self.video_sub_ai_mode_var, value="local").pack(anchor=tk.W)
+        ttk.Radiobutton(ai_group, text="DeepSeek API", variable=self.video_sub_ai_mode_var, value="api").pack(anchor=tk.W)
+        ttk.Checkbutton(ai_group, text="下载后生成深度分析", variable=self.video_sub_analysis_var).pack(anchor=tk.W, pady=(8, 0))
+        ttk.Checkbutton(ai_group, text="下载后生成双语翻译", variable=self.video_sub_translate_var).pack(anchor=tk.W)
+
+        more = ttk.LabelFrame(right, text="额外选项", padding=16, style="Panel.TLabelframe")
+        more.pack(fill=tk.X, pady=(12, 0))
+        ttk.Label(more, text="B站合集/分 P").pack(anchor=tk.W)
+        ttk.Radiobutton(more, text="仅当前视频", variable=self.video_sub_playlist_var, value="current").pack(anchor=tk.W)
+        ttk.Radiobutton(more, text="下载全部", variable=self.video_sub_playlist_var, value="all").pack(anchor=tk.W)
+        ttk.Checkbutton(more, text="失败时尝试本地 ASR 转写", variable=self.video_sub_asr_var).pack(anchor=tk.W, pady=(8, 0))
+
+        actions = ttk.Frame(right, style="App.TFrame")
+        actions.pack(fill=tk.X, pady=(12, 0))
+        ttk.Button(actions, text="开始下载字幕", style="Primary.TButton", command=self.start_video_sub_download).pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8), ipady=6
+        )
+        ttk.Button(actions, text="打开输出目录", command=self.open_video_sub_output_dir).pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0), ipady=6
         )
         ttk.Label(
-            group,
-            text="这个项目本身已有 Web 前端。这里先作为独立服务启动，日志进入 C 运行日志，避免重写它的交互流程。",
+            right,
+            text="输出目录沿用 video-sub-md/config.py 的 DEFAULT_OUTPUT_DIR。SESSDATA 会通过 --cookie 传入，优先级高于旧环境变量。",
             style="Subtle.TLabel",
-            wraplength=760,
+            wraplength=520,
         ).pack(anchor=tk.W, pady=(12, 0))
         return frame
 
@@ -413,7 +460,7 @@ class DoubaoFrontend(tk.Tk):
             fill=tk.X, pady=(5, 10)
         )
 
-        ttk.Button(group, text="扫描最新 Markdown", style="Primary.TButton", command=self.scan_files).pack(
+        ttk.Button(group, text="刷新 A/B 状态", style="Primary.TButton", command=self.refresh_all).pack(
             fill=tk.X, pady=(4, 6)
         )
         ttk.Button(group, text="从文件选择 Markdown", command=self.pick_markdown_files).pack(fill=tk.X)
@@ -507,6 +554,7 @@ class DoubaoFrontend(tk.Tk):
         self.podcast_tree.column("duration", width=80, minwidth=70, stretch=False)
         self.podcast_tree.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
         self.podcast_tree.bind("<Button-1>", self.on_podcast_click)
+        self.podcast_tree.bind("<Button-3>", self.on_podcast_right_click)
         self.podcast_tree.bind("<Double-1>", self.on_podcast_double_click)
         self.podcast_tree.bind("<<TreeviewOpen>>", self.on_podcast_tree_open)
 
@@ -567,8 +615,7 @@ class DoubaoFrontend(tk.Tk):
 
         b_row1 = ttk.Frame(bgroup, style="Surface.TFrame")
         b_row1.pack(fill=tk.X)
-        ttk.Button(b_row1, text="刷新历史链接", command=self.load_b_history).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
-        ttk.Button(b_row1, text="扫描选中链接", command=self.scan_b_link).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
+        ttk.Button(b_row1, text="扫描选中链接播客", command=self.scan_b_link).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         b_row2 = ttk.Frame(bgroup, style="Surface.TFrame")
         b_row2.pack(fill=tk.X, pady=(10, 0))
@@ -608,7 +655,7 @@ class DoubaoFrontend(tk.Tk):
         self.log_text.configure(yscrollcommand=log_scrollbar.set)
         log_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-    def _run_external_command(self, title, cmd, cwd=None, stdin_text=None):
+    def _run_external_command(self, title, cmd, cwd=None, stdin_text=None, env=None):
         if self.worker_thread and self.worker_thread.is_alive():
             messagebox.showinfo("任务运行中", "当前已有任务在运行。")
             return
@@ -618,15 +665,29 @@ class DoubaoFrontend(tk.Tk):
         self.status_var.set(f"{title} 运行中")
         if hasattr(self, "notebook"):
             self.notebook.select(2)
-        self._append_log(f"\n[{title}] 命令: {' '.join(str(part) for part in cmd)}\n")
+        self._append_log(f"\n[{title}] 命令: {self._masked_command_text(cmd)}\n")
         self.worker_thread = threading.Thread(
             target=self._external_command_worker,
-            args=(title, cmd, cwd, stdin_text),
+            args=(title, cmd, cwd, stdin_text, env),
             daemon=True,
         )
         self.worker_thread.start()
 
-    def _external_command_worker(self, title, cmd, cwd, stdin_text):
+    def _masked_command_text(self, cmd):
+        masked = []
+        hide_next = False
+        for part in cmd:
+            text = str(part)
+            if hide_next:
+                masked.append("***")
+                hide_next = False
+                continue
+            masked.append(text)
+            if text in {"--sessdata", "--cookie"}:
+                hide_next = True
+        return " ".join(masked)
+
+    def _external_command_worker(self, title, cmd, cwd, stdin_text, env):
         ok = False
         try:
             self.current_process = subprocess.Popen(
@@ -638,6 +699,7 @@ class DoubaoFrontend(tk.Tk):
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                env=env,
             )
             if stdin_text is not None and self.current_process.stdin:
                 self.current_process.stdin.write(stdin_text)
@@ -659,23 +721,93 @@ class DoubaoFrontend(tk.Tk):
         messagebox.showerror("缺少 Python", "找不到可用 python.exe，请设置 DOUBAO_PYTHON_EXE。")
         return ""
 
-    def start_video_sub_web(self):
+    def _video_sub_urls(self):
+        text = self.video_sub_links_text.get("1.0", tk.END)
+        parts = [part.strip() for part in text.replace(",", " ").split() if part.strip()]
+        urls = []
+        seen = set()
+        for part in parts:
+            if part in seen:
+                continue
+            seen.add(part)
+            urls.append(part)
+        return urls
+
+    def start_video_sub_download(self):
         python_exe = self._python_or_warn()
         if not python_exe:
             return
         tool_dir = self._external_tool_dir("video_sub")
-        web_app = tool_dir / "web_app.py"
-        if not web_app.exists():
-            messagebox.showerror("缺少工具", f"找不到 Video Sub Web 入口:\n{web_app}")
+        script = RESOURCE_DIR / "video_sub_runner.py"
+        if not (tool_dir / "main.py").exists() or not script.exists():
+            messagebox.showerror("缺少工具", f"找不到 Video Sub 入口:\n{script}")
             return
-        port = self.video_sub_port_var.get().strip() or "7860"
-        cmd = [python_exe, "-m", "uvicorn", "web_app:app", "--host", "127.0.0.1", "--port", port]
-        self._run_external_command("Video Sub MD", cmd, cwd=tool_dir)
-        self.after(1500, self.open_video_sub_web)
+        urls = self._video_sub_urls()
+        if not urls:
+            messagebox.showwarning("缺少链接", "请先粘贴至少一个视频链接。")
+            return
+        try:
+            max_concurrent = max(1, int(self.video_sub_concurrent_var.get().strip() or "5"))
+        except ValueError:
+            max_concurrent = 5
+            self.video_sub_concurrent_var.set("5")
+        cmd = [
+            python_exe,
+            str(script),
+            "--tool-dir",
+            str(tool_dir),
+            "--max-concurrent",
+            str(max_concurrent),
+        ]
+        for url in urls:
+            cmd.extend(["--url", url])
+        lang = self.video_sub_lang_var.get().strip()
+        if lang:
+            cmd.extend(["--lang", lang])
+        sessdata = self.video_sub_sessdata_var.get().strip()
+        if sessdata:
+            cmd.extend(["--sessdata", sessdata])
 
-    def open_video_sub_web(self):
-        port = self.video_sub_port_var.get().strip() or "7860"
-        webbrowser.open(f"http://127.0.0.1:{port}")
+        ai_mode = self.video_sub_ai_mode_var.get()
+        if ai_mode == "local":
+            cmd.extend(["--ai-choice", "0"])
+        elif ai_mode == "api":
+            cmd.extend(["--ai-choice", "1"])
+        else:
+            cmd.extend(["--ai-choice", ""])
+        cmd.extend(["--playlist-choice", "a" if self.video_sub_playlist_var.get() == "all" else "b"])
+        cmd.extend(["--asr-choice", "a" if self.video_sub_asr_var.get() else "b"])
+        cmd.extend(["--analysis-choice", "a" if self.video_sub_analysis_var.get() else "b"])
+        cmd.extend(["--translate-choice", "a" if self.video_sub_translate_var.get() else "b"])
+        env = os.environ.copy()
+        if sessdata:
+            env["BILI_COOKIE"] = ""
+            env["BILIBILI_SESSDATA"] = ""
+        self._run_external_command(
+            "Video Sub MD",
+            cmd,
+            cwd=tool_dir,
+            env=env,
+        )
+
+    def open_video_sub_output_dir(self):
+        output_dir = self._video_sub_config_value("DEFAULT_OUTPUT_DIR")
+        if output_dir and Path(output_dir).exists():
+            os.startfile(str(output_dir))
+            return
+        messagebox.showinfo("输出目录", "输出目录沿用 video-sub-md/config.py 的 DEFAULT_OUTPUT_DIR。当前没有读取到已存在目录。")
+
+    def _video_sub_config_value(self, name):
+        tool_dir = self._external_tool_dir("video_sub")
+        config_path = tool_dir / "config.py"
+        if not config_path.exists():
+            return ""
+        try:
+            text = config_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return ""
+        match = re.search(rf"^{name}\s*=\s*Path\((['\"])(.*?)\1\)", text, re.MULTILINE)
+        return match.group(2) if match else ""
 
     def choose_github_output_dir(self):
         path = filedialog.askdirectory(initialdir=self.github_output_var.get() or str(Path.home()))
@@ -812,6 +944,16 @@ class DoubaoFrontend(tk.Tk):
         self.status_var.set(f"扫描完成：{len(scanned)} 个文件")
         self._append_log(f"[扫描] {vault}\n[扫描] 找到 {len(scanned)} 个 Markdown 文件\n")
 
+    def refresh_all(self):
+        self._append_log("\n[刷新] 正在刷新 A Markdown 和 B 播客状态...\n")
+        self.b_podcasts_by_url.clear()
+        self.b_podcast_items.clear()
+        self.loaded_b_links.clear()
+        self.bound_markdown_index = None
+        self.scan_files()
+        self.load_b_history()
+        self.status_var.set("A/B 状态已刷新")
+
     def pick_markdown_files(self):
         files = filedialog.askopenfilenames(
             title="选择 Markdown 文件",
@@ -886,6 +1028,21 @@ class DoubaoFrontend(tk.Tk):
                 for item in data.get("bound_markdown", []):
                     if item.get("stem"):
                         bound.add(item["stem"])
+        return bound
+
+    def _bound_markdown_stems_global(self):
+        bound = self._bound_markdown_stems()
+        for data in self._read_json_logs():
+            if data.get("task_type") == "B_DOWNLOAD_BIND":
+                for item in data.get("bound_markdown", []):
+                    stem = item.get("stem", "")
+                    if stem:
+                        bound.add(stem)
+            if data.get("task_type") == "A_GENERATE_PODCAST":
+                for item in data.get("pdf_files", []):
+                    md_path = item.get("markdown_path", "")
+                    if md_path and self._markdown_has_embedded_podcast(md_path):
+                        bound.add(Path(md_path).stem)
         return bound
 
     def _markdown_has_embedded_podcast(self, path):
@@ -1210,6 +1367,9 @@ class DoubaoFrontend(tk.Tk):
         return self.b_link_var.get().strip()
 
     def load_b_history(self):
+        self.b_podcasts_by_url.clear()
+        self.b_podcast_items.clear()
+        self.loaded_b_links.clear()
         logs = self._read_json_logs()
         link_meta = {}
 
@@ -1276,6 +1436,12 @@ class DoubaoFrontend(tk.Tk):
         vault = Path(self.vault_var.get().strip()).expanduser()
         audio_dir = self._audio_dir()
         mp3_exists = (audio_dir / f"{stem}.mp3").exists()
+        global_bound = self._bound_markdown_stems_global()
+        if stem in global_bound:
+            return "已绑定"
+        for bound_stem in global_bound:
+            if stem in bound_stem or bound_stem in stem:
+                return "已绑定"
         bound_index = self._bound_markdown_file_index()
         if stem in bound_index:
             return "已绑定"
@@ -1361,7 +1527,7 @@ class DoubaoFrontend(tk.Tk):
                             "source": "A记录",
                         }
             if data.get("task_type") == "B_DOWNLOAD_BIND":
-                for item in data.get("bound_markdown", []) + data.get("failed_bindings", []):
+                for item in data.get("bound_markdown", []) + data.get("failed_bindings", []) + data.get("missing_audio", []):
                     stem = item.get("stem", "")
                     if stem:
                         pdf = f"{stem}.pdf"
@@ -1472,6 +1638,61 @@ class DoubaoFrontend(tk.Tk):
             self.podcast_tree.item(item, open=not self.podcast_tree.item(item, "open"))
         elif item:
             self.toggle_podcast(item)
+
+    def on_podcast_right_click(self, event):
+        item = self.podcast_tree.identify_row(event.y)
+        if not item:
+            return
+        self.podcast_tree.focus(item)
+        self.podcast_tree.selection_set(item)
+        menu = tk.Menu(self, tearoff=0)
+        if item == "more_links":
+            menu.add_command(label="加载更多历史链接", command=lambda: self._load_more_b_links())
+        elif item in self.b_link_items:
+            url = self.b_link_items[item]
+            menu.add_command(label="展开/收起该链接", command=lambda iid=item, link=url: self.toggle_b_link_row(iid, link))
+            menu.add_command(label="刷新该链接状态", command=lambda link=url: self.refresh_b_link(link))
+            menu.add_separator()
+            menu.add_command(label="在浏览器打开豆包链接", command=lambda link=url: webbrowser.open(link))
+            menu.add_command(label="复制豆包链接", command=lambda link=url: self.copy_text(link, "已复制豆包链接"))
+        elif item in self.b_podcast_items:
+            data = self.b_podcast_items[item]
+            url = data["url"]
+            pdf = data.get("pdf", "")
+            menu.add_command(label="勾选/取消该播客", command=lambda iid=item: self.toggle_podcast(iid))
+            menu.add_command(label="刷新所属链接状态", command=lambda link=url: self.refresh_b_link(link))
+            menu.add_separator()
+            menu.add_command(label="复制 PDF 名称", command=lambda text=pdf: self.copy_text(text, "已复制 PDF 名称"))
+            menu.add_command(label="在浏览器打开豆包链接", command=lambda link=url: webbrowser.open(link))
+            menu.add_command(label="复制豆包链接", command=lambda link=url: self.copy_text(link, "已复制豆包链接"))
+        else:
+            return
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def _load_more_b_links(self):
+        self.b_visible_link_count += B_LINK_BATCH_SIZE
+        self._refresh_podcast_tree_links()
+
+    def toggle_b_link_row(self, iid, url):
+        self.b_link_var.set(url)
+        self._load_link_children(url)
+        self.podcast_tree.item(iid, open=not self.podcast_tree.item(iid, "open"))
+
+    def refresh_b_link(self, url):
+        link_iid = self._link_iid(url)
+        self.b_podcasts_by_url.pop(url, None)
+        self.loaded_b_links.discard(link_iid)
+        self.bound_markdown_index = None
+        if self.podcast_tree.exists(link_iid):
+            self._load_link_children(url)
+            self.podcast_tree.item(link_iid, open=True)
+        self._refresh_podcast_table()
+        self.status_var.set("该链接状态已刷新")
+
+    def copy_text(self, text, status="已复制"):
+        self.clipboard_clear()
+        self.clipboard_append(str(text))
+        self.status_var.set(status)
 
     def toggle_podcast(self, iid):
         item = self.b_podcast_items.get(iid)
@@ -1761,7 +1982,7 @@ class DoubaoFrontend(tk.Tk):
                     pipeline.clear_stop_request()
                     self.status_var.set("任务完成" if payload else "任务结束：存在失败或中断")
                     self._append_log("\n[任务] 流程结束\n")
-                    self.after(300, self.scan_files)
+                    self.after(300, self.refresh_all)
         except queue.Empty:
             pass
         self.after(100, self._drain_log_queue)
