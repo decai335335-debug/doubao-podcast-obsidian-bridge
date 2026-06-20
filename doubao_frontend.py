@@ -21,6 +21,7 @@ import tempfile
 import threading
 import time
 import tkinter as tk
+import webbrowser
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
 from pathlib import Path
@@ -48,6 +49,23 @@ from playwright.async_api import async_playwright
 RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 B_LINK_BATCH_SIZE = 25
+EXTERNAL_TOOLS = {
+    "video_sub": {
+        "title": "Video Sub MD",
+        "path": Path(r"E:\Projects\ai\video-sub-md"),
+        "packed": RESOURCE_DIR / "tools" / "video-sub-md",
+    },
+    "github_downloader": {
+        "title": "GitHub Repo Downloader",
+        "path": Path(r"E:\Projects\tools\github-repo-downloader"),
+        "packed": RESOURCE_DIR / "tools" / "github-repo-downloader",
+    },
+    "auto_unzip": {
+        "title": "Auto Unzip",
+        "path": Path(r"E:\Projects\tools\auto-unzip"),
+        "packed": RESOURCE_DIR / "tools" / "auto-unzip",
+    },
+}
 
 
 def resolve_python_exe():
@@ -239,8 +257,28 @@ class DoubaoFrontend(tk.Tk):
             style="Status.TLabel",
         ).pack(side=tk.RIGHT, anchor=tk.N, pady=(4, 0))
 
-        body = ttk.PanedWindow(root, orient=tk.HORIZONTAL)
-        body.pack(fill=tk.BOTH, expand=True, pady=(16, 0))
+        switcher = ttk.Frame(root, style="App.TFrame")
+        switcher.pack(fill=tk.X, pady=(14, 0))
+        self.tool_buttons = {}
+        for key, label in (
+            ("doubao", "豆包播客"),
+            ("video_sub", "Video Sub MD"),
+            ("github_downloader", "GitHub 下载器"),
+            ("auto_unzip", "Auto Unzip"),
+        ):
+            btn = ttk.Button(switcher, text=label, command=lambda name=key: self.show_tool(name))
+            btn.pack(side=tk.LEFT, padx=(0, 8), ipadx=8)
+            self.tool_buttons[key] = btn
+
+        self.tool_container = ttk.Frame(root, style="App.TFrame")
+        self.tool_container.pack(fill=tk.BOTH, expand=True, pady=(12, 0))
+        self.tool_frames = {}
+
+        doubao_frame = ttk.Frame(self.tool_container, style="App.TFrame")
+        self.tool_frames["doubao"] = doubao_frame
+
+        body = ttk.PanedWindow(doubao_frame, orient=tk.HORIZONTAL)
+        body.pack(fill=tk.BOTH, expand=True)
 
         left = ttk.Frame(body, width=300, style="App.TFrame")
         middle = ttk.Frame(body, style="App.TFrame")
@@ -250,6 +288,115 @@ class DoubaoFrontend(tk.Tk):
         self._build_left_panel(left)
         self._build_action_panel(middle)
         self._build_file_table(middle)
+        self.tool_frames["video_sub"] = self._build_video_sub_tool(self.tool_container)
+        self.tool_frames["github_downloader"] = self._build_github_downloader_tool(self.tool_container)
+        self.tool_frames["auto_unzip"] = self._build_auto_unzip_tool(self.tool_container)
+        self.show_tool("doubao")
+
+    def show_tool(self, name):
+        for frame in self.tool_frames.values():
+            frame.pack_forget()
+        frame = self.tool_frames.get(name)
+        if frame:
+            frame.pack(fill=tk.BOTH, expand=True)
+        for key, button in getattr(self, "tool_buttons", {}).items():
+            button.state(["pressed"] if key == name else ["!pressed"])
+
+    def _external_tool_dir(self, key):
+        info = EXTERNAL_TOOLS[key]
+        for path in (info["packed"], info["path"]):
+            if path.exists():
+                return path
+        return info["path"]
+
+    def _build_tool_shell(self, parent, title, subtitle):
+        frame = ttk.Frame(parent, style="App.TFrame")
+        header = ttk.Frame(frame, style="App.TFrame")
+        header.pack(fill=tk.X)
+        ttk.Label(header, text=title, style="Section.TLabel").pack(anchor=tk.W)
+        ttk.Label(header, text=subtitle, style="Subtitle.TLabel").pack(anchor=tk.W, pady=(3, 0))
+        content = ttk.Frame(frame, style="App.TFrame")
+        content.pack(fill=tk.BOTH, expand=True, pady=(14, 0))
+        return frame, content
+
+    def _build_video_sub_tool(self, parent):
+        frame, content = self._build_tool_shell(
+            parent,
+            "Video Sub MD",
+            "启动原项目的 Web 界面，处理视频字幕下载、分析和 Markdown 输出。",
+        )
+        group = ttk.LabelFrame(content, text="启动 Web 工具", padding=16, style="Panel.TLabelframe")
+        group.pack(fill=tk.X)
+        self.video_sub_port_var = tk.StringVar(value="7860")
+        ttk.Label(group, text="服务端口").pack(anchor=tk.W)
+        ttk.Entry(group, textvariable=self.video_sub_port_var, width=12).pack(anchor=tk.W, pady=(5, 10))
+        row = ttk.Frame(group, style="Surface.TFrame")
+        row.pack(fill=tk.X)
+        ttk.Button(row, text="启动 Video Sub Web", style="Primary.TButton", command=self.start_video_sub_web).pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8), ipady=5
+        )
+        ttk.Button(row, text="打开浏览器页面", command=self.open_video_sub_web).pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0), ipady=5
+        )
+        ttk.Label(
+            group,
+            text="这个项目本身已有 Web 前端。这里先作为独立服务启动，日志进入 C 运行日志，避免重写它的交互流程。",
+            style="Subtle.TLabel",
+            wraplength=760,
+        ).pack(anchor=tk.W, pady=(12, 0))
+        return frame
+
+    def _build_github_downloader_tool(self, parent):
+        frame, content = self._build_tool_shell(
+            parent,
+            "GitHub Repo Downloader",
+            "粘贴 GitHub 仓库或子目录链接，下载到指定文件夹。",
+        )
+        group = ttk.LabelFrame(content, text="下载任务", padding=16, style="Panel.TLabelframe")
+        group.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(group, text="GitHub 链接（每行一个）").pack(anchor=tk.W)
+        self.github_links_text = tk.Text(group, height=8, wrap=tk.WORD, font=("Consolas", 10))
+        self.github_links_text.pack(fill=tk.X, pady=(5, 10))
+        self.github_output_var = tk.StringVar(value=r"E:\Projects\downloads\github-repos")
+        ttk.Label(group, text="保存目录").pack(anchor=tk.W)
+        out_row = ttk.Frame(group, style="Surface.TFrame")
+        out_row.pack(fill=tk.X, pady=(5, 10))
+        ttk.Entry(out_row, textvariable=self.github_output_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(out_row, text="选择目录", command=self.choose_github_output_dir).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(group, text="开始下载", style="Primary.TButton", command=self.start_github_download).pack(
+            fill=tk.X, ipady=6
+        )
+        return frame
+
+    def _build_auto_unzip_tool(self, parent):
+        frame, content = self._build_tool_shell(
+            parent,
+            "Auto Unzip",
+            "批量解压 ZIP 文件夹，或选择多个压缩包解压并删除源压缩包。",
+        )
+        group = ttk.LabelFrame(content, text="自动解压", padding=16, style="Panel.TLabelframe")
+        group.pack(fill=tk.X)
+        self.unzip_folder_var = tk.StringVar(value=str(Path.home() / "Downloads"))
+        ttk.Label(group, text="扫描 ZIP 的文件夹").pack(anchor=tk.W)
+        folder_row = ttk.Frame(group, style="Surface.TFrame")
+        folder_row.pack(fill=tk.X, pady=(5, 10))
+        ttk.Entry(folder_row, textvariable=self.unzip_folder_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(folder_row, text="选择文件夹", command=self.choose_unzip_folder).pack(side=tk.LEFT, padx=(8, 0))
+        row = ttk.Frame(group, style="Surface.TFrame")
+        row.pack(fill=tk.X)
+        ttk.Button(row, text="批量解压该文件夹 ZIP", style="Primary.TButton", command=self.start_auto_unzip_folder).pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8), ipady=5
+        )
+        ttk.Button(row, text="选择压缩包解压", command=self.start_auto_unzip_files).pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0), ipady=5
+        )
+        ttk.Label(
+            group,
+            text="会调用 auto-unzip 原项目脚本。成功解压后，原脚本会按自己的规则删除源压缩包。",
+            style="Subtle.TLabel",
+            wraplength=760,
+        ).pack(anchor=tk.W, pady=(12, 0))
+        return frame
 
     def _build_left_panel(self, parent):
         group = ttk.LabelFrame(parent, text="仓库与筛选", padding=14, style="Panel.TLabelframe")
@@ -332,6 +479,7 @@ class DoubaoFrontend(tk.Tk):
         self.tree.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
         self.tree.bind("<Button-1>", self.on_tree_click)
         self.tree.bind("<Double-1>", self.on_tree_double_click)
+        self.tree.bind("<Button-3>", self.on_markdown_right_click)
 
         scrollbar = ttk.Scrollbar(markdown_tab, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
@@ -459,6 +607,129 @@ class DoubaoFrontend(tk.Tk):
         log_scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=log_scrollbar.set)
         log_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def _run_external_command(self, title, cmd, cwd=None, stdin_text=None):
+        if self.worker_thread and self.worker_thread.is_alive():
+            messagebox.showinfo("任务运行中", "当前已有任务在运行。")
+            return
+        self.progress.start(10)
+        self.stop_requested = False
+        self.stop_button.configure(state=tk.NORMAL)
+        self.status_var.set(f"{title} 运行中")
+        if hasattr(self, "notebook"):
+            self.notebook.select(2)
+        self._append_log(f"\n[{title}] 命令: {' '.join(str(part) for part in cmd)}\n")
+        self.worker_thread = threading.Thread(
+            target=self._external_command_worker,
+            args=(title, cmd, cwd, stdin_text),
+            daemon=True,
+        )
+        self.worker_thread.start()
+
+    def _external_command_worker(self, title, cmd, cwd, stdin_text):
+        ok = False
+        try:
+            self.current_process = subprocess.Popen(
+                cmd,
+                cwd=str(cwd) if cwd else None,
+                stdin=subprocess.PIPE if stdin_text is not None else None,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            if stdin_text is not None and self.current_process.stdin:
+                self.current_process.stdin.write(stdin_text)
+                self.current_process.stdin.close()
+            for line in self.current_process.stdout or []:
+                self.log_queue.put(("log", line))
+            code = self.current_process.wait()
+            ok = code == 0
+            self.log_queue.put(("log", f"\n[{title}] 退出码: {code}\n"))
+        except Exception as exc:
+            self.log_queue.put(("log", f"\n[{title}错误] {exc}\n"))
+        finally:
+            self.current_process = None
+            self.log_queue.put(("done", ok))
+
+    def _python_or_warn(self):
+        if HELPER_PYTHON:
+            return HELPER_PYTHON
+        messagebox.showerror("缺少 Python", "找不到可用 python.exe，请设置 DOUBAO_PYTHON_EXE。")
+        return ""
+
+    def start_video_sub_web(self):
+        python_exe = self._python_or_warn()
+        if not python_exe:
+            return
+        tool_dir = self._external_tool_dir("video_sub")
+        web_app = tool_dir / "web_app.py"
+        if not web_app.exists():
+            messagebox.showerror("缺少工具", f"找不到 Video Sub Web 入口:\n{web_app}")
+            return
+        port = self.video_sub_port_var.get().strip() or "7860"
+        cmd = [python_exe, "-m", "uvicorn", "web_app:app", "--host", "127.0.0.1", "--port", port]
+        self._run_external_command("Video Sub MD", cmd, cwd=tool_dir)
+        self.after(1500, self.open_video_sub_web)
+
+    def open_video_sub_web(self):
+        port = self.video_sub_port_var.get().strip() or "7860"
+        webbrowser.open(f"http://127.0.0.1:{port}")
+
+    def choose_github_output_dir(self):
+        path = filedialog.askdirectory(initialdir=self.github_output_var.get() or str(Path.home()))
+        if path:
+            self.github_output_var.set(path)
+
+    def start_github_download(self):
+        python_exe = self._python_or_warn()
+        if not python_exe:
+            return
+        tool_dir = self._external_tool_dir("github_downloader")
+        script = tool_dir / "github_batch_downloader.py"
+        if not script.exists():
+            messagebox.showerror("缺少工具", f"找不到 GitHub 下载器入口:\n{script}")
+            return
+        links = [line.strip() for line in self.github_links_text.get("1.0", tk.END).splitlines() if line.strip()]
+        if not links:
+            messagebox.showwarning("缺少链接", "请先粘贴至少一个 GitHub 链接。")
+            return
+        output_dir = self.github_output_var.get().strip()
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        cmd = [python_exe, str(script), "--links", "\n".join(links)]
+        self._run_external_command("GitHub 下载器", cmd, cwd=tool_dir, stdin_text=f"{output_dir}\n")
+
+    def choose_unzip_folder(self):
+        path = filedialog.askdirectory(initialdir=self.unzip_folder_var.get() or str(Path.home()))
+        if path:
+            self.unzip_folder_var.set(path)
+
+    def start_auto_unzip_folder(self):
+        python_exe = self._python_or_warn()
+        if not python_exe:
+            return
+        tool_dir = self._external_tool_dir("auto_unzip")
+        script = tool_dir / "scripts" / "auto_unzip.py"
+        folder = self.unzip_folder_var.get().strip()
+        if not Path(folder).is_dir():
+            messagebox.showwarning("目录不存在", "请选择一个存在的文件夹。")
+            return
+        self._run_external_command("Auto Unzip", [python_exe, str(script), folder], cwd=tool_dir)
+
+    def start_auto_unzip_files(self):
+        python_exe = self._python_or_warn()
+        if not python_exe:
+            return
+        tool_dir = self._external_tool_dir("auto_unzip")
+        script = tool_dir / "scripts" / "drop_unzip.py"
+        files = filedialog.askopenfilenames(
+            title="选择压缩包",
+            filetypes=[("Archives", "*.zip *.7z *.rar *.tar *.gz *.tgz *.bz2 *.xz"), ("All files", "*.*")],
+        )
+        if not files:
+            return
+        self._run_external_command("Auto Unzip", [python_exe, str(script), *files], cwd=tool_dir)
 
     def choose_vault(self):
         path = filedialog.askdirectory(initialdir=self.vault_var.get() or str(Path.home()))
@@ -671,6 +942,177 @@ class DoubaoFrontend(tk.Tk):
         if item:
             self.selected_paths = {item}
             self._refresh_table()
+
+    def on_markdown_right_click(self, event):
+        item = self.tree.identify_row(event.y)
+        if not item:
+            return
+        self.tree.focus(item)
+        self.tree.selection_set(item)
+        path = Path(item)
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label="在 Obsidian 中打开 Markdown", command=lambda: self.open_markdown_file(path))
+        menu.add_command(label="打开对应豆包链接", command=lambda: self.open_markdown_doubao_link(path))
+        menu.add_command(label="复制最近豆包链接", command=lambda: self.copy_markdown_doubao_link(path))
+        menu.add_separator()
+        menu.add_command(label="查看绑定/生成记录", command=lambda: self.show_markdown_records(path))
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def open_markdown_file(self, path):
+        if not path.exists():
+            messagebox.showwarning("文件不存在", f"找不到 Markdown 文件:\n{path}")
+            return
+        try:
+            os.startfile(str(path))
+        except Exception as exc:
+            messagebox.showerror("打开失败", str(exc))
+
+    def _record_matches_markdown(self, item, stem, path_text):
+        values = [
+            item.get("stem", ""),
+            item.get("name", ""),
+            item.get("pdf", ""),
+            item.get("pdf_name", ""),
+            item.get("markdown_path", ""),
+            item.get("md_path", ""),
+            item.get("path", ""),
+        ]
+        for value in values:
+            if not value:
+                continue
+            try:
+                if Path(str(value)).stem == stem:
+                    return True
+            except Exception:
+                pass
+            if path_text and path_text in str(value):
+                return True
+        return False
+
+    def _records_for_markdown(self, path):
+        stem = path.stem
+        path_text = str(path)
+        records = []
+        seen = set()
+        for data in self._read_json_logs():
+            url = data.get("chat_url", "")
+            if not pipeline.is_real_doubao_chat_url(url):
+                continue
+            created_at = data.get("created_at", "")
+            task_type = data.get("task_type", "")
+            json_path = data.get("_json_path", "")
+            status = ""
+            matched = False
+            if task_type == "A_GENERATE_PODCAST":
+                for item in data.get("markdown_files", []):
+                    if isinstance(item, dict) and self._record_matches_markdown(item, stem, path_text):
+                        matched = True
+                        status = item.get("status", "") or "A Markdown"
+                for item in data.get("pdf_files", []):
+                    if isinstance(item, dict) and self._record_matches_markdown(item, stem, path_text):
+                        matched = True
+                        status = "已上传" if item.get("uploaded") else "生成记录"
+            elif task_type == "B_DOWNLOAD_BIND":
+                for key, label in (
+                    ("bound_markdown", "已绑定"),
+                    ("failed_bindings", "绑定失败"),
+                    ("missing_audio", "缺少音频"),
+                ):
+                    for item in data.get(key, []):
+                        if isinstance(item, dict) and self._record_matches_markdown(item, stem, path_text):
+                            matched = True
+                            status = label
+            if not matched:
+                continue
+            dedupe = (url, created_at, status, task_type)
+            if dedupe in seen:
+                continue
+            seen.add(dedupe)
+            records.append(
+                {
+                    "time": created_at,
+                    "status": status or task_type,
+                    "url": url,
+                    "task_type": task_type,
+                    "json_path": json_path,
+                }
+            )
+        records.sort(key=lambda item: item.get("time", ""), reverse=True)
+        return records
+
+    def open_markdown_doubao_link(self, path):
+        records = self._records_for_markdown(path)
+        if not records:
+            messagebox.showinfo("无对应链接", "这个 Markdown 暂时没有对应豆包链接记录。")
+            return
+        if len(records) == 1:
+            webbrowser.open(records[0]["url"])
+            return
+        self.show_markdown_records(path)
+
+    def copy_markdown_doubao_link(self, path):
+        records = self._records_for_markdown(path)
+        if not records:
+            messagebox.showinfo("无对应链接", "这个 Markdown 暂时没有对应豆包链接记录。")
+            return
+        self.clipboard_clear()
+        self.clipboard_append(records[0]["url"])
+        self.status_var.set("已复制最近豆包链接")
+
+    def show_markdown_records(self, path):
+        records = self._records_for_markdown(path)
+        if not records:
+            messagebox.showinfo("无对应记录", "这个 Markdown 暂时没有对应豆包链接记录。")
+            return
+        win = tk.Toplevel(self)
+        win.title(f"历史豆包链接 - {path.name}")
+        win.geometry("860x360")
+        win.transient(self)
+        frame = ttk.Frame(win, padding=12, style="Surface.TFrame")
+        frame.pack(fill=tk.BOTH, expand=True)
+        columns = ("time", "status", "task_type", "url")
+        tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="browse")
+        for col, text, width in (
+            ("time", "时间", 150),
+            ("status", "状态", 100),
+            ("task_type", "来源", 160),
+            ("url", "豆包链接", 420),
+        ):
+            tree.heading(col, text=text)
+            tree.column(col, width=width)
+        tree.pack(fill=tk.BOTH, expand=True)
+        for index, record in enumerate(records):
+            tree.insert(
+                "",
+                tk.END,
+                iid=str(index),
+                values=(record["time"], record["status"], record["task_type"], record["url"]),
+            )
+        tree.selection_set("0")
+        tree.focus("0")
+
+        def selected_record():
+            item = tree.focus()
+            if not item:
+                return records[0]
+            return records[int(item)]
+
+        def open_selected(_event=None):
+            webbrowser.open(selected_record()["url"])
+
+        def copy_selected():
+            self.clipboard_clear()
+            self.clipboard_append(selected_record()["url"])
+            self.status_var.set("已复制豆包链接")
+
+        tree.bind("<Double-1>", open_selected)
+        row = ttk.Frame(frame, style="Surface.TFrame")
+        row.pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(row, text="打开选中链接", style="Primary.TButton", command=open_selected).pack(
+            side=tk.LEFT, padx=(0, 8)
+        )
+        ttk.Button(row, text="复制选中链接", command=copy_selected).pack(side=tk.LEFT)
+        ttk.Button(row, text="关闭", command=win.destroy).pack(side=tk.RIGHT)
 
     def toggle_item(self, path_text):
         if path_text in self.selected_paths:
@@ -998,7 +1440,11 @@ class DoubaoFrontend(tk.Tk):
             self._load_link_children(url)
 
     def on_podcast_click(self, event):
-        if self.podcast_tree.identify("region", event.x, event.y) != "cell":
+        region = self.podcast_tree.identify("region", event.x, event.y)
+        if region not in {"cell", "tree"}:
+            return
+        element = self.podcast_tree.identify("element", event.x, event.y)
+        if "indicator" in str(element):
             return
         item = self.podcast_tree.identify_row(event.y)
         if item:
