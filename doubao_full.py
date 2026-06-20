@@ -11,6 +11,7 @@ doubao_full.py
 
 import subprocess
 import sys
+import os
 from pathlib import Path
 
 
@@ -33,6 +34,7 @@ def main():
             print("错误: 未提供URL，程序退出")
             sys.exit(1)
     script_dir = Path(__file__).parent
+    obsidian_vault = os.environ.get("DOUBAO_OBSIDIAN_VAULT", r"E:\Obsidian\主仓库")
     
     # Step 1: 扫描
     run_step("1/4 扫描播客列表", ["python", str(script_dir / "doubao_scanner.py"), url])
@@ -45,7 +47,7 @@ def main():
     
     # Step 4: 清理WAV（确保删除）
     run_step("4/4 清理WAV文件", ["python", "-c", 
-        "from pathlib import Path; [f.unlink() for f in (Path.home() / 'Documents/Obsidian/申论真题/附件/音频').glob('*.wav')]; print('WAV清理完成')"
+        f"from pathlib import Path; [f.unlink() for f in (Path(r'{obsidian_vault}') / '附件' / '音频').glob('*.wav')]; print('WAV清理完成')"
     ])
     
     print(f"\n{'='*60}")

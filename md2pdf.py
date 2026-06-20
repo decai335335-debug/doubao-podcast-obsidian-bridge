@@ -14,6 +14,20 @@ import os
 import sys
 from pathlib import Path
 
+
+def configure_playwright_browsers():
+    if os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
+        return
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if not local_app_data:
+        return
+    browsers = Path(local_app_data) / "ms-playwright"
+    if browsers.exists():
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browsers)
+
+
+configure_playwright_browsers()
+
 # ============ 依赖检查 ============
 def check_dependencies():
     missing = []

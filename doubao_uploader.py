@@ -24,10 +24,24 @@ import time
 from pathlib import Path
 from datetime import datetime
 
+
+def configure_playwright_browsers():
+    if os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
+        return
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if not local_app_data:
+        return
+    browsers = Path(local_app_data) / "ms-playwright"
+    if browsers.exists():
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browsers)
+
+
+configure_playwright_browsers()
+
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 
 # ===================== 配置常量 =====================
-SCRIPT_DIR = Path(__file__).parent
+SCRIPT_DIR = Path(os.environ.get("DOUBAO_BRIDGE_APP_DIR", Path(__file__).parent))
 STATE_FILE = SCRIPT_DIR / "doubao_state.json"
 PROGRESS_FILE = SCRIPT_DIR / "upload_progress.json"
 DEBUG_DIR = SCRIPT_DIR / "doubao_debug"

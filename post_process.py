@@ -17,15 +17,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+from bridge_json_log import LATEST_B_FILE, now_text, task_id, write_task_log
+
 # 修复 Windows 终端 GBK 编码导致 emoji 输出崩溃
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
-VAULT = Path.home() / "Documents" / "Obsidian" / "申论真题"
+VAULT = Path(os.environ.get("DOUBAO_OBSIDIAN_VAULT", r"E:\Obsidian\主仓库"))
 AUDIO_DIR = VAULT / "附件" / "音频"
+APP_DIR = Path(os.environ.get("DOUBAO_BRIDGE_APP_DIR", Path(__file__).parent))
 
 # 记录文件（与 pipeline 共用同一个）
-RECORD_FILE = Path.home() / "Documents" / "Obsidian" / "申论真题" / "总报告" / "豆包播客代码上传与下载绑定记录.md"
+RECORD_FILE = VAULT / "总报告" / "豆包播客代码上传与下载绑定记录.md"
 
 
 def _ensure_record_file():
@@ -39,7 +42,7 @@ def _ensure_record_file():
 
 def _load_chat_url():
     """从 pipeline_state.json 读取聊天链接"""
-    state_file = Path(__file__).parent / "pipeline_state.json"
+    state_file = APP_DIR / "pipeline_state.json"
     if state_file.exists():
         try:
             with open(state_file, "r", encoding="utf-8") as f:
@@ -111,7 +114,7 @@ def wav_to_mp3(wav_path: Path) -> Path:
 
 def _load_md_mapping():
     """读取 pipeline 保存的 md_mapping.json（pdf_name -> md_full_path）"""
-    mapping_file = Path(__file__).parent / "md_mapping.json"
+    mapping_file = APP_DIR / "md_mapping.json"
     if mapping_file.exists():
         try:
             with open(mapping_file, "r", encoding="utf-8") as f:
@@ -182,10 +185,22 @@ def process_mp3(mp3_path: Path, chat_url: str = ""):
     md = find_md_file(stem)
     if not md:
         print(f"[跳过] 找不到对应Markdown: {stem}.md")
-        return False
+        return {
+            "stem": stem,
+            "mp3_path": str(mp3_path.resolve()),
+            "markdown_path": "",
+            "bound": False,
+            "reason": "markdown_not_found",
+        }
     
     embed_podcast(md, mp3_path.name, chat_url)
-    return True
+    return {
+        "stem": stem,
+        "mp3_path": str(mp3_path.resolve()),
+        "markdown_path": str(md.resolve()),
+        "bound": True,
+        "reason": "",
+    }
 
 
 def load_last_upload_batch() -> list:
@@ -243,6 +258,8 @@ def main():
                         help="同时处理已有 MP3（默认只处理本次上传记录中的文件）")
     parser.add_argument("--all-wav", action="store_true",
                         help="处理 AUDIO_DIR 下全部 WAV（忽略记录文件）")
+    parser.add_argument("--targets-file",
+                        help="指定要绑定的 stem 列表文件（每行一个，优先级高于上传记录）")
     args = parser.parse_args()
 
     # 读取当前聊天链接
@@ -251,9 +268,20 @@ def main():
         print(f"[信息] 当前聊天链接: {chat_url}\n")
     
     bound_stems = []  # 收集成功绑定的文件名
+    bind_results = []
+    missing_audio = []
     
     # 优先从上传记录读取本次要绑定的文件列表
-    target_stems = load_last_upload_batch()
+    target_stems = []
+    if args.targets_file:
+        try:
+            with open(args.targets_file, "r", encoding="utf-8") as f:
+                target_stems = [line.strip() for line in f if line.strip()]
+            print(f"[信息] 从 targets-file 读取到 {len(target_stems)} 个待绑定文件\n")
+        except Exception as e:
+            print(f"[警告] 读取 targets-file 失败: {e}\n")
+    if not target_stems:
+        target_stems = load_last_upload_batch()
     
     if target_stems and not args.all_wav:
         print(f"[信息] 从上传记录读取到 {len(target_stems)} 个待绑定文件\n")
@@ -262,15 +290,26 @@ def main():
             mp3 = AUDIO_DIR / f"{stem}.mp3"
             if wav.exists():
                 result = wav_to_mp3(wav)
-                if result and process_mp3(result, chat_url):
-                    bound_stems.append(stem)
+                if result:
+                    bind_result = process_mp3(result, chat_url)
+                    bind_results.append(bind_result)
+                    if bind_result.get("bound"):
+                        bound_stems.append(stem)
                 print()
             elif mp3.exists():
-                if process_mp3(mp3, chat_url):
+                bind_result = process_mp3(mp3, chat_url)
+                bind_results.append(bind_result)
+                if bind_result.get("bound"):
                     bound_stems.append(stem)
                 print()
             else:
                 print(f"[跳过] 找不到音频: {stem}.wav/.mp3\n")
+                missing_audio.append({
+                    "stem": stem,
+                    "wav_path": str(wav.resolve()),
+                    "mp3_path": str(mp3.resolve()),
+                    "reason": "audio_not_found",
+                })
     else:
         # 回退：遍历 AUDIO_DIR 下全部 WAV（兼容旧模式）
         wav_files = sorted(AUDIO_DIR.glob("*.wav"))
@@ -278,8 +317,11 @@ def main():
             print(f"[信息] 发现 {len(wav_files)} 个 WAV 文件待处理\n")
             for wav in wav_files:
                 mp3 = wav_to_mp3(wav)
-                if mp3 and process_mp3(mp3, chat_url):
-                    bound_stems.append(mp3.stem)
+                if mp3:
+                    bind_result = process_mp3(mp3, chat_url)
+                    bind_results.append(bind_result)
+                    if bind_result.get("bound"):
+                        bound_stems.append(mp3.stem)
                 print()
         
         # 处理已有 MP3（仅当 --bind-existing 时）
@@ -289,7 +331,9 @@ def main():
             if args.bind_existing:
                 print(f"[信息] 发现 {len(mp3_to_bind)} 个已有 MP3 待绑定\n")
                 for mp3 in mp3_to_bind:
-                    if process_mp3(mp3, chat_url):
+                    bind_result = process_mp3(mp3, chat_url)
+                    bind_results.append(bind_result)
+                    if bind_result.get("bound"):
                         bound_stems.append(mp3.stem)
                     print()
             else:
@@ -301,6 +345,26 @@ def main():
     
     if not target_stems and not list(AUDIO_DIR.glob("*.wav")) and not list(AUDIO_DIR.glob("*.mp3")):
         print("[信息] 没有需要处理的音频文件")
+
+    failed_bindings = [item for item in bind_results if not item.get("bound")]
+    b_log = {
+        "task_id": task_id("b_download_bind"),
+        "task_type": "B_DOWNLOAD_BIND",
+        "created_at": now_text(),
+        "status": "success" if not failed_bindings and not missing_audio else "partial_or_failed",
+        "chat_url": chat_url,
+        "vault": str(VAULT.resolve()),
+        "audio_dir": str(AUDIO_DIR.resolve()),
+        "target_stems": target_stems,
+        "bound_markdown": [item for item in bind_results if item.get("bound")],
+        "failed_bindings": failed_bindings,
+        "missing_audio": missing_audio,
+    }
+    try:
+        log_path = write_task_log(b_log, latest_file=LATEST_B_FILE)
+        print(f"[JSON] B流程记录已保存: {log_path}")
+    except Exception as e:
+        print(f"[警告] 保存 B流程 JSON 记录失败: {e}")
     
     print("=" * 60)
     print("全部处理完成！")

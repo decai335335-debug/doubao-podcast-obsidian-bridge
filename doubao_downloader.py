@@ -10,18 +10,34 @@ doubao_downloader.py
 """
 
 import asyncio
+import os
 import re
 import shutil
 import sys
 from pathlib import Path
 
+
+def configure_playwright_browsers():
+    if os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
+        return
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if not local_app_data:
+        return
+    browsers = Path(local_app_data) / "ms-playwright"
+    if browsers.exists():
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browsers)
+
+
+configure_playwright_browsers()
+
 from playwright.async_api import async_playwright
 
 CHAT_URL = sys.argv[1] if len(sys.argv) > 1 and ("doubao.com" in sys.argv[1] or sys.argv[1].startswith("http")) else "https://www.doubao.com/chat/38424121600911362"
+APP_DIR = Path(os.environ.get("DOUBAO_BRIDGE_APP_DIR", Path(__file__).parent))
 if "--all" in sys.argv:
     import json
     try:
-        with open(Path(__file__).parent / "podcasts_list.json", "r", encoding="utf-8") as f:
+        with open(APP_DIR / "podcasts_list.json", "r", encoding="utf-8") as f:
             podcasts = json.load(f)
         TARGET_PDFS = [pc["pdf"] for pc in podcasts]
         print(f"[信息] 从JSON加载了 {len(TARGET_PDFS)} 个播客")
@@ -41,9 +57,9 @@ else:
     TARGET_PDFS = [a for a in sys.argv[1:] if not a.startswith("-") and "doubao.com" not in a and not a.startswith("http")]
 
 DOWNLOADS_DIR = Path.home() / "Downloads"
-OBSIDIAN_VAULT = Path.home() / "Documents" / "Obsidian" / "申论真题"
+OBSIDIAN_VAULT = Path(os.environ.get("DOUBAO_OBSIDIAN_VAULT", r"E:\Obsidian\主仓库"))
 AUDIO_DIR = OBSIDIAN_VAULT / "附件" / "音频"
-STATE_FILE = Path(__file__).parent / "doubao_state.json"
+STATE_FILE = APP_DIR / "doubao_state.json"
 LOGIN_WAIT_SECONDS = 8
 DOWNLOAD_TIMEOUT = 180
 
@@ -215,7 +231,7 @@ async def main():
         print(f"\n[等待] {LOGIN_WAIT_SECONDS} 秒后自动开始下载...")
         await asyncio.sleep(LOGIN_WAIT_SECONDS)
         
-        await context.storage_state(path=str(STATE_FILE))
+        # 下载器只读取登录态，不主动覆盖，避免未登录页面把有效状态写坏。
         
         # 逐个下载
         success_count = 0

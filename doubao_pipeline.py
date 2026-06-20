@@ -18,12 +18,17 @@ doubao_pipeline.py — 豆包播客全自动流水线（交互式入口）
 import asyncio
 import json
 import os
+import re
 import subprocess
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 from playwright.async_api import async_playwright
+
+from bridge_json_log import LATEST_A_FILE, now_text, task_id, write_task_log
+from md2pdf import md_to_pdf
 
 # 直接复用 uploader 的核心函数（pipeline 自己控制浏览器生命周期）
 from doubao_uploader import (
@@ -44,7 +49,8 @@ from doubao_uploader import (
 )
 
 # ============ 上传/下载绑定记录 ============
-RECORD_FILE = Path(r"C:\Users\15403\Documents\Obsidian\申论真题\总报告\豆包播客代码上传与下载绑定记录.md")
+OBSIDIAN_VAULT = Path(os.environ.get("DOUBAO_OBSIDIAN_VAULT", r"E:\Obsidian\主仓库"))
+RECORD_FILE = OBSIDIAN_VAULT / "总报告" / "豆包播客代码上传与下载绑定记录.md"
 
 
 def _ensure_record_file():
@@ -131,7 +137,7 @@ def append_download_bind_record(filename: str, chat_url: str = ""):
 
 
 # ============ 路径配置 ============
-SCRIPT_DIR = Path(__file__).parent
+SCRIPT_DIR = Path(os.environ.get("DOUBAO_BRIDGE_APP_DIR", Path(__file__).parent))
 MD2PDF_SCRIPT = SCRIPT_DIR / "md2pdf.py"
 UPLOADER_SCRIPT = SCRIPT_DIR / "doubao_uploader.py"
 SCANNER_SCRIPT = SCRIPT_DIR / "doubao_scanner.py"
@@ -140,8 +146,39 @@ POST_PROCESS_SCRIPT = SCRIPT_DIR / "post_process.py"
 FULL_SCRIPT = SCRIPT_DIR / "doubao_full.py"
 STATE_FILE = SCRIPT_DIR / "pipeline_state.json"
 UPLOAD_PROGRESS_FILE = SCRIPT_DIR / "upload_progress.json"
+DEFAULT_MARKDOWN_SCAN_DIR = os.environ.get(
+    "DOUBAO_MD_SCAN_DIR",
+    str(OBSIDIAN_VAULT),
+)
+SCAN_EXCLUDED_DIRS = {
+    ".git",
+    ".obsidian",
+    "__pycache__",
+    "node_modules",
+    ".venv",
+    "venv",
+    "pdf_output",
+    "doubao_debug",
+}
 
 PYTHON_EXE = sys.executable
+STOP_REQUESTED = False
+
+
+def request_stop():
+    """请求正在运行的流程尽快停止。"""
+    global STOP_REQUESTED
+    STOP_REQUESTED = True
+
+
+def clear_stop_request():
+    """清除停止请求。"""
+    global STOP_REQUESTED
+    STOP_REQUESTED = False
+
+
+def should_stop():
+    return STOP_REQUESTED
 
 
 def load_state():
@@ -162,6 +199,58 @@ def save_state(state):
             json.dump(state, f, ensure_ascii=False, indent=2)
     except Exception as e:
         print(f"⚠️  保存状态失败: {e}")
+
+
+def is_real_doubao_chat_url(url: str) -> bool:
+    """判断是否为可复用的豆包真实聊天地址，排除 chat/local_ 临时地址。"""
+    if not url:
+        return False
+    return bool(re.match(r"^https://www\.doubao\.com/chat/(?!local_)\d+", url.strip()))
+
+
+def get_saved_chat_url():
+    """读取已保存且有效的真实聊天地址。"""
+    chat_url_txt = SCRIPT_DIR / "chat_url.txt"
+    if chat_url_txt.exists():
+        try:
+            url = chat_url_txt.read_text(encoding="utf-8").strip()
+            if is_real_doubao_chat_url(url):
+                return url
+        except Exception:
+            pass
+
+    state = load_state()
+    url = state.get("chat_url", "")
+    if is_real_doubao_chat_url(url):
+        return url
+    return ""
+
+
+async def wait_for_real_chat_url(page, timeout=12):
+    """等待豆包把 chat/local_ 临时地址切换成真实聊天地址。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        current_url = page.url
+        if is_real_doubao_chat_url(current_url):
+            return current_url
+        await asyncio.sleep(1)
+    return page.url
+
+
+def save_chat_url_if_real(url: str) -> bool:
+    """只保存真实聊天地址，避免 local_ 临时地址覆盖正确记录。"""
+    if not is_real_doubao_chat_url(url):
+        print(f"⚠️  当前页面仍是临时聊天地址，未覆盖已保存地址: {url}")
+        return False
+    url_file = SCRIPT_DIR / "chat_url.txt"
+    try:
+        with open(url_file, "w", encoding="utf-8") as f:
+            f.write(url)
+        print(f"聊天地址已保存: {url_file} -> {url}")
+        return True
+    except Exception as e:
+        print(f"⚠️  保存聊天地址失败: {e}")
+        return False
 
 
 def _get_paths_from_clipboard_hdrop():
@@ -310,6 +399,139 @@ def _get_paths_from_file(file_path):
     return paths
 
 
+def _format_file_time(timestamp):
+    """把文件时间戳格式化为便于选择时查看的文本。"""
+    try:
+        return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return "-"
+
+
+def _get_best_file_time(path):
+    """Windows 上优先用创建时间，其他情况用较新的修改时间兜底。"""
+    stat = path.stat()
+    return max(getattr(stat, "st_ctime", 0), getattr(stat, "st_mtime", 0))
+
+
+def scan_markdown_files(scan_dir, limit=80):
+    """扫描目录下的 Markdown 文件，按最新添加/修改时间倒序排列。"""
+    root = Path(scan_dir).expanduser()
+    if not root.exists() or not root.is_dir():
+        print(f"❌ 扫描目录不存在或不是文件夹: {root}")
+        return []
+
+    files = []
+    for md_file in root.rglob("*"):
+        try:
+            if md_file.is_dir():
+                continue
+            if any(part in SCAN_EXCLUDED_DIRS for part in md_file.parts):
+                continue
+            if md_file.suffix.lower() not in (".md", ".markdown"):
+                continue
+            if "未命名" in md_file.stem:
+                continue
+            best_time = _get_best_file_time(md_file)
+            files.append((best_time, md_file.resolve()))
+        except Exception:
+            continue
+
+    files.sort(key=lambda item: item[0], reverse=True)
+    if limit and limit > 0:
+        files = files[:limit]
+    return files
+
+
+def _parse_selection(selection, total):
+    """解析 1,3,5-8 / all 这类终端选择。"""
+    selection = selection.strip().lower()
+    if selection in ("all", "a", "*"):
+        return list(range(total))
+
+    indexes = set()
+    for part in selection.replace("，", ",").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            start_text, end_text = part.split("-", 1)
+            if not start_text.strip().isdigit() or not end_text.strip().isdigit():
+                raise ValueError(part)
+            start = int(start_text)
+            end = int(end_text)
+            if start > end:
+                start, end = end, start
+            for number in range(start, end + 1):
+                if 1 <= number <= total:
+                    indexes.add(number - 1)
+            continue
+        if not part.isdigit():
+            raise ValueError(part)
+        number = int(part)
+        if 1 <= number <= total:
+            indexes.add(number - 1)
+
+    return sorted(indexes)
+
+
+def choose_markdown_files_from_scan():
+    """扫描文件夹并让用户选择要走模式 A 的 Markdown 文件。"""
+    default_dir = DEFAULT_MARKDOWN_SCAN_DIR
+    print("\n📁 扫描 Markdown 文件")
+    print(f"默认目录: {default_dir}")
+    try:
+        scan_dir = input("请输入要扫描的文件夹（回车使用默认，q 取消）: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return []
+    if scan_dir.lower() == "q":
+        return []
+    if not scan_dir:
+        scan_dir = default_dir
+
+    try:
+        limit_text = input("最多显示多少个最新文件？（默认 80）: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        limit_text = ""
+    limit = 80
+    if limit_text:
+        try:
+            limit = max(1, int(limit_text))
+        except ValueError:
+            print("⚠️  数量无效，使用默认 80。")
+
+    scanned = scan_markdown_files(scan_dir, limit=limit)
+    if not scanned:
+        print("⚠️  没有扫描到可处理的 Markdown 文件。")
+        return []
+
+    root = Path(scan_dir).expanduser()
+    print(f"\n✅ 找到 {len(scanned)} 个最新 Markdown 文件（新到旧）:")
+    for i, (timestamp, path) in enumerate(scanned, 1):
+        try:
+            display_path = path.relative_to(root)
+        except ValueError:
+            display_path = path
+        print(f"   [{i:>2}] {_format_file_time(timestamp)}  {display_path}")
+
+    print("\n选择要生成播客的文件编号，支持 1,3,5-8；输入 all 全选；输入 q 取消。")
+    while True:
+        try:
+            selection = input("> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return []
+        if not selection or selection.lower() == "q":
+            return []
+        try:
+            indexes = _parse_selection(selection, len(scanned))
+        except ValueError:
+            print("⚠️  选择格式无效，请重新输入，例如 1,3,5-8 或 all。")
+            continue
+        if not indexes:
+            print("⚠️  没有选中任何有效编号，请重新输入。")
+            continue
+        return [str(scanned[i][1]) for i in indexes]
+
+
 def print_banner():
     print("=" * 60)
     print("  🎙️  豆包播客全自动流水线")
@@ -369,7 +591,7 @@ async def scroll_to_bottom(page):
         print(f"  ⚠️  滚动到底部失败: {e}")
 
 
-async def run_generate_flow(pdf_files):
+async def run_generate_flow(pdf_files, browser_visible=True):
     """
     直接调用 uploader 函数逐个上传 PDF 并生成播客。
     与原来的 subprocess 方式的区别：
@@ -380,17 +602,18 @@ async def run_generate_flow(pdf_files):
     # 默认不跳过已处理的文件（和原来 subprocess.run 不带 --resume 的行为一致）
     processed = set()
     failed = set(progress.get("failed", []))
+    upload_success_list = []
 
     pending = [str(p) for p in pdf_files]
     if not pending:
         print("没有可处理的 PDF 文件")
-        return True
+        return {"ok": True, "processed": [], "failed": [], "chat_url": "", "upload_success": []}
 
     print(f"待处理 PDF 数量: {len(pending)}")
     print("启动浏览器...")
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
+        browser = await p.chromium.launch(headless=not browser_visible)
 
         if DOUBAO_STATE_FILE.exists():
             print(f"加载登录态: {DOUBAO_STATE_FILE}")
@@ -409,14 +632,15 @@ async def run_generate_flow(pdf_files):
         if not await ensure_chat_open(page):
             print("❌ 无法打开聊天窗口，退出")
             await browser.close()
-            return False
+            return {"ok": False, "processed": [], "failed": pending, "chat_url": "", "upload_success": []}
 
         # 会话级播客计数器（解决虚拟滚动导致 DOM 计数不准的问题）
         session_podcast_count = 0
-        # 批量收集上传成功记录，最后一次性写入
-        upload_success_list = []
-
         for idx, pdf_path in enumerate(pending, 1):
+            if should_stop():
+                print("⚠️  已请求停止，后续 PDF 不再处理。")
+                failed.update(Path(p).name for p in pending[idx - 1:])
+                break
             pdf_path = Path(pdf_path)
             print(f"\n{'='*50}")
             print(f"[{idx}/{len(pending)}] 处理: {pdf_path.name}")
@@ -477,15 +701,9 @@ async def run_generate_flow(pdf_files):
                 print("  ⏳ 等待 3 秒后处理下一个 PDF...")
                 await asyncio.sleep(3)
 
-        # 保存当前聊天页面 URL，供后续下载使用
-        current_url = page.url
-        url_file = SCRIPT_DIR / "chat_url.txt"
-        try:
-            with open(url_file, "w", encoding="utf-8") as f:
-                f.write(current_url)
-            print(f"聊天地址已保存: {url_file} -> {current_url}")
-        except Exception as e:
-            print(f"⚠️  保存聊天地址失败: {e}")
+        # 保存当前聊天页面 URL，供后续下载使用；避免 local_ 临时地址覆盖真实地址
+        current_url = await wait_for_real_chat_url(page)
+        saved_real_url = current_url if save_chat_url_if_real(current_url) else get_saved_chat_url()
 
         # 所有 PDF 上传+点击生成完成后，统一等待剩余播客生成
         if upload_success_list:
@@ -504,7 +722,7 @@ async def run_generate_flow(pdf_files):
                 print(f"⚠️  统一检测失败: {e}")
 
             # 一次性写入上传记录
-            write_batch_upload_records(upload_success_list, page.url)
+            write_batch_upload_records(upload_success_list, saved_real_url or page.url)
 
         await take_debug_screenshot(page, "upload_complete")
         await context.close()
@@ -516,7 +734,170 @@ async def run_generate_flow(pdf_files):
     print(f"失败: {len(failed)} 个")
     print(f"{'='*50}")
 
-    return len(failed) == 0
+    return {
+        "ok": len(failed) == 0,
+        "processed": sorted(processed),
+        "failed": sorted(failed),
+        "chat_url": get_saved_chat_url(),
+        "upload_success": upload_success_list,
+    }
+
+
+def run_generate_for_markdown_files(md_files, browser_visible=True):
+    """给前端调用的模式 A 入口：对指定 Markdown 列表执行生成播客流程。"""
+    if not MD2PDF_SCRIPT.exists():
+        print(f"❌ 未找到 md2pdf 工具: {MD2PDF_SCRIPT}")
+        print("   请确认 md2pdf.py 已放在本目录下")
+        return False
+
+    valid_md = []
+    for f in md_files:
+        p = Path(str(f).strip().strip('"').strip("'"))
+        if not p.exists():
+            print(f"⚠️  跳过（不存在）: {p}")
+            continue
+        if p.suffix.lower() not in (".md", ".markdown"):
+            print(f"⚠️  跳过（非 Markdown）: {p}")
+            continue
+        if "未命名" in p.stem:
+            print(f"⚠️  跳过（未命名文件）: {p.name}")
+            continue
+        valid_md.append(str(p))
+
+    if not valid_md:
+        print("没有可处理的 Markdown 文件。")
+        return False
+
+    print(f"\n📄 待处理: {len(valid_md)} 个 Markdown 文件")
+    for i, f in enumerate(valid_md, 1):
+        print(f"   [{i}] {Path(f).name}")
+
+    print("\n" + "-" * 40)
+    print("[步骤 1/3] Markdown → PDF 转换...")
+    print("-" * 40)
+
+    pdf_output_dir = str(SCRIPT_DIR / "pdf_output")
+    pdf_output_path = Path(pdf_output_dir)
+    convert_ok = True
+    for idx, md_path in enumerate(valid_md, 1):
+        if should_stop():
+            print("⚠️  已请求停止，PDF 转换中断。")
+            convert_ok = False
+            break
+        print(f"[{idx}/{len(valid_md)}] {Path(md_path).name}")
+        if not md_to_pdf(Path(md_path), pdf_output_path):
+            convert_ok = False
+
+    if not convert_ok:
+        print("❌ PDF 转换失败，退出。")
+        return False
+
+    pdf_dir = Path(pdf_output_dir)
+    pdf_files = []
+    md_mapping = {}
+    for md_path in valid_md:
+        expected_pdf = pdf_dir / f"{Path(md_path).stem}.pdf"
+        if expected_pdf.exists():
+            pdf_files.append(expected_pdf)
+            md_mapping[expected_pdf.name] = str(Path(md_path).resolve())
+
+    if not pdf_files:
+        print(f"❌ 在 {pdf_output_dir} 中未找到本次生成的 PDF 文件。")
+        return False
+
+    mapping_file = SCRIPT_DIR / "md_mapping.json"
+    try:
+        with open(mapping_file, "w", encoding="utf-8") as f:
+            json.dump(md_mapping, f, ensure_ascii=False, indent=2)
+        print(f"📋 Markdown 路径映射已保存: {mapping_file}")
+    except Exception as e:
+        print(f"⚠️  保存路径映射失败: {e}")
+
+    print(f"\n📁 本次生成 {len(pdf_files)} 个 PDF 文件:")
+    for p in pdf_files:
+        print(f"   • {p.name}")
+
+    print("\n" + "-" * 40)
+    print("[步骤 2/3] 上传 PDF 到豆包并生成播客...")
+    print("-" * 40)
+    print("⚠️  即将打开浏览器，请确保已登录豆包。")
+    print(f"   浏览器模式: {'可见' if browser_visible else '隐藏'}\n")
+
+    flow_result = {
+        "ok": False,
+        "processed": [],
+        "failed": [],
+        "chat_url": "",
+        "upload_success": [],
+    }
+    has_failures = False
+    try:
+        flow_result = asyncio.run(run_generate_flow(pdf_files, browser_visible=browser_visible))
+        if not flow_result.get("ok"):
+            has_failures = True
+    except KeyboardInterrupt:
+        print("\n⚠️  用户中断，进度已保存。")
+        has_failures = True
+    except Exception as e:
+        print(f"\n⚠️  上传/生成过程中异常: {e}")
+        has_failures = True
+
+    if has_failures:
+        print("\n⚠️  上传/生成过程中可能有部分失败。")
+        print("   可使用断点续传: python doubao_uploader.py <PDF目录> --resume")
+
+    print("\n" + "-" * 40)
+    print("[步骤 3/3] 保存聊天地址...")
+    print("-" * 40)
+
+    saved_url = get_saved_chat_url()
+
+    state = load_state()
+    if saved_url:
+        state["chat_url"] = saved_url
+        state["pdfs"] = [p.name for p in pdf_files]
+        state["last_run"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        save_state(state)
+        print(f"✅ 状态已保存到 pipeline_state.json")
+        print(f"   URL: {saved_url}")
+        print(f"   本次上传 PDF: {len(pdf_files)} 个")
+        for p in pdf_files:
+            print(f"      • {p.name}")
+        print("\n💡 输入 [b] 即可自动下载该聊天中的所有播客。")
+    else:
+        print("⚠️  未找到保存的聊天地址，请在浏览器中手动复制地址。")
+
+    a_log = {
+        "task_id": task_id("a_generate"),
+        "task_type": "A_GENERATE_PODCAST",
+        "created_at": now_text(),
+        "status": "success" if not has_failures else "partial_or_failed",
+        "browser_visible": browser_visible,
+        "chat_url": saved_url or flow_result.get("chat_url", ""),
+        "markdown_files": [
+            {"path": str(Path(md).resolve()), "name": Path(md).name, "stem": Path(md).stem}
+            for md in valid_md
+        ],
+        "pdf_files": [
+            {
+                "path": str(pdf.resolve()),
+                "name": pdf.name,
+                "markdown_path": md_mapping.get(pdf.name, ""),
+                "uploaded": pdf.name in set(flow_result.get("upload_success", [])),
+                "failed": pdf.name in set(flow_result.get("failed", [])),
+            }
+            for pdf in pdf_files
+        ],
+        "uploaded_pdfs": flow_result.get("upload_success", []),
+        "failed_pdfs": flow_result.get("failed", []),
+    }
+    try:
+        log_path = write_task_log(a_log, latest_file=LATEST_A_FILE)
+        print(f"🧾 A流程 JSON 记录已保存: {log_path}")
+    except Exception as e:
+        print(f"⚠️  保存 A流程 JSON 记录失败: {e}")
+
+    return not has_failures
 
 
 def mode_generate():
@@ -544,12 +925,15 @@ def mode_generate():
         if len(md_files) > 10:
             print(f"   ... 还有 {len(md_files) - 10} 个")
         try:
-            use_clipboard = input("\n是否使用剪贴板中的路径? (y/n/f=从文件读取): ").strip().lower()
+            use_clipboard = input("\n是否使用剪贴板中的路径? (y/n/f=从文件读取/s=扫描文件夹): ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             use_clipboard = 'n'
         if use_clipboard == 'f':
             md_files = []
             file_input = True
+        elif use_clipboard == 's':
+            md_files = choose_markdown_files_from_scan()
+            file_input = False
         elif use_clipboard != 'y':
             md_files = []
             file_input = False
@@ -557,6 +941,14 @@ def mode_generate():
             file_input = False
     else:
         file_input = False
+        try:
+            source_choice = input("\n未从剪贴板检测到路径。是否扫描文件夹选择 Markdown？(s=扫描/回车=手动粘贴/f=从文件读取): ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            source_choice = ""
+        if source_choice == "s":
+            md_files = choose_markdown_files_from_scan()
+        elif source_choice == "f":
+            file_input = True
 
     # 从文件读取路径
     if not md_files and file_input:
@@ -667,10 +1059,17 @@ def mode_generate():
     print("   如果是首次运行，请在浏览器内完成登录。\n")
 
     # 直接调用 uploader 函数（不再开子进程），这样可以在每个 PDF 成功后插入滚动
+    flow_result = {
+        "ok": False,
+        "processed": [],
+        "failed": [],
+        "chat_url": "",
+        "upload_success": [],
+    }
     has_failures = False
     try:
-        success = asyncio.run(run_generate_flow(pdf_files))
-        if not success:
+        flow_result = asyncio.run(run_generate_flow(pdf_files))
+        if not flow_result.get("ok"):
             has_failures = True
     except KeyboardInterrupt:
         print("\n⚠️  用户中断，进度已保存。")
@@ -689,11 +1088,7 @@ def mode_generate():
     print("-" * 40)
 
     # uploader 把 URL 写到了 chat_url.txt，pipeline 把它整合到 pipeline_state.json
-    chat_url_txt = SCRIPT_DIR / "chat_url.txt"
-    saved_url = None
-    if chat_url_txt.exists():
-        with open(chat_url_txt, "r", encoding="utf-8") as f:
-            saved_url = f.read().strip()
+    saved_url = get_saved_chat_url()
 
     state = load_state()
     if saved_url:
@@ -710,6 +1105,36 @@ def mode_generate():
     else:
         print("⚠️  未找到保存的聊天地址，请在浏览器中手动复制地址。")
 
+    a_log = {
+        "task_id": task_id("a_generate"),
+        "task_type": "A_GENERATE_PODCAST",
+        "created_at": now_text(),
+        "status": "success" if not has_failures else "partial_or_failed",
+        "browser_visible": True,
+        "chat_url": saved_url or flow_result.get("chat_url", ""),
+        "markdown_files": [
+            {"path": str(Path(md).resolve()), "name": Path(md).name, "stem": Path(md).stem}
+            for md in valid_md
+        ],
+        "pdf_files": [
+            {
+                "path": str(pdf.resolve()),
+                "name": pdf.name,
+                "markdown_path": md_mapping.get(pdf.name, ""),
+                "uploaded": pdf.name in set(flow_result.get("upload_success", [])),
+                "failed": pdf.name in set(flow_result.get("failed", [])),
+            }
+            for pdf in pdf_files
+        ],
+        "uploaded_pdfs": flow_result.get("upload_success", []),
+        "failed_pdfs": flow_result.get("failed", []),
+    }
+    try:
+        log_path = write_task_log(a_log, latest_file=LATEST_A_FILE)
+        print(f"🧾 A流程 JSON 记录已保存: {log_path}")
+    except Exception as e:
+        print(f"⚠️  保存 A流程 JSON 记录失败: {e}")
+
     print("\n" + "=" * 60)
     print("  模式 [a] 执行完毕")
     print("=" * 60)
@@ -725,6 +1150,9 @@ def mode_download():
     # 读取保存的聊天地址
     state = load_state()
     chat_url = state.get("chat_url")
+    if chat_url and not is_real_doubao_chat_url(chat_url):
+        print(f"⚠️  已保存的地址是豆包临时地址，已忽略:\n   {chat_url}")
+        chat_url = None
 
     if chat_url:
         print(f"📌 已读取上次保存的聊天地址:\n   {chat_url}")

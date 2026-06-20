@@ -18,6 +18,14 @@ md_check.json
 pdf_output/
 md2pdf/
 文档备份。/
+build/
+dist/
+release/
+
+# EXE 运行态 / 任务状态
+md_mapping.json
+pipeline_state.json
+*.log
 
 # Python
 __pycache__/
