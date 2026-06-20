@@ -1721,11 +1721,16 @@ class DoubaoFrontend(tk.Tk):
                             "source": "A记录",
                         }
             if data.get("task_type") == "B_DOWNLOAD_BIND":
-                for item in data.get("bound_markdown", []) + data.get("failed_bindings", []) + data.get("missing_audio", []):
-                    stem = item.get("stem", "")
+                for stem in data.get("target_stems", []):
                     if stem:
                         pdf = f"{stem}.pdf"
-                        podcasts.setdefault(pdf, {"pdf": pdf, "title": "", "duration": "", "source": "B记录"})
+                        podcasts.setdefault(pdf, {"pdf": pdf, "title": "", "duration": "", "source": "B目标"})
+                if not podcasts:
+                    for item in data.get("missing_audio", []):
+                        stem = item.get("stem", "")
+                        if stem:
+                            pdf = f"{stem}.pdf"
+                            podcasts.setdefault(pdf, {"pdf": pdf, "title": "", "duration": "", "source": "B缺音频"})
 
         result = []
         for pdf, item in sorted(podcasts.items()):
@@ -2016,7 +2021,7 @@ class DoubaoFrontend(tk.Tk):
                 steps = [
                     scanner_cmd,
                     downloader_cmd,
-                    [HELPER_PYTHON, str(script_dir / "post_process.py"), "--bind-existing", "--all-wav"],
+                    [HELPER_PYTHON, str(script_dir / "post_process.py"), "--bind-existing"],
                 ]
                 ok = True
                 for cmd in steps:
