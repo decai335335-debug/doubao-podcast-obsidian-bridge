@@ -10,7 +10,7 @@ from pathlib import Path
 from datetime import datetime
 
 # 默认扫描目录
-DEFAULT_SCAN_DIR = r"C:\Users\15403\Documents\Obsidian\申论真题"
+DEFAULT_SCAN_DIR = os.environ.get("DOUBAO_OBSIDIAN_VAULT", r"E:\Obsidian\主仓库")
 # 截止时间（今天0:00）
 CUTOFF_TIME = datetime(2026, 5, 29, 0, 0, 0)
 

@@ -9,15 +9,32 @@ doubao_scanner.py
 """
 
 import asyncio
+import os
 import re
 import sys
 from pathlib import Path
 
+
+def configure_playwright_browsers():
+    if os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
+        return
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if not local_app_data:
+        return
+    browsers = Path(local_app_data) / "ms-playwright"
+    if browsers.exists():
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browsers)
+
+
+configure_playwright_browsers()
+
 from playwright.async_api import async_playwright
 
 CHAT_URL = sys.argv[1] if len(sys.argv) > 1 else "https://www.doubao.com/chat/38424121600911362"
-STATE_FILE = Path(__file__).parent / "doubao_state.json"
+APP_DIR = Path(os.environ.get("DOUBAO_BRIDGE_APP_DIR", Path(__file__).parent))
+STATE_FILE = APP_DIR / "doubao_state.json"
 LOGIN_WAIT_SECONDS = 8
+BROWSER_VISIBLE = "--headless" not in sys.argv
 
 
 async def scroll_up_and_collect(page):
@@ -128,7 +145,7 @@ async def main():
     async with async_playwright() as p:
         print("[启动] 正在启动浏览器...")
         browser = await p.chromium.launch(
-            headless=False,
+            headless=not BROWSER_VISIBLE,
             args=["--disable-blink-features=AutomationControlled"]
         )
         
@@ -156,15 +173,14 @@ async def main():
         print(f"\n[等待] {LOGIN_WAIT_SECONDS} 秒后自动开始扫描...")
         await asyncio.sleep(LOGIN_WAIT_SECONDS)
         
-        # 保存登录态
-        await context.storage_state(path=str(STATE_FILE))
+        # 扫描器只读取登录态，不主动覆盖，避免未登录页面把有效状态写坏。
         
         # 扫描所有播客
         podcasts = await scroll_up_and_collect(page)
         
         # 保存JSON（保存到脚本所在目录，和下载器保持一致）
         import json
-        json_path = Path(__file__).parent / 'podcasts_list.json'
+        json_path = APP_DIR / 'podcasts_list.json'
         with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(podcasts, f, ensure_ascii=False, indent=2)
         
